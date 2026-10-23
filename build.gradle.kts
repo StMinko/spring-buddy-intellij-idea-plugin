@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.sarhan.springformat"
-version = "1.0.3"
+version = "1.0.4"
 
 repositories {
     mavenCentral()
@@ -42,7 +42,7 @@ dependencies {
 intellijPlatform {
     pluginConfiguration {
         name = "Spring Buddy"
-        version = "1.0.3"
+        version = "1.0.4"
         description = """
             <h2>Make invisible Spring runtime behavior visible.</h2>
               <p>
@@ -70,6 +70,10 @@ intellijPlatform {
               </p>
         """.trimIndent()
         changeNotes = """
+            <h3>1.0.4</h3>
+            <ul>
+              <li><b>Markdown export:</b> right-click the inspection results view and export the selected findings as a machine-friendly Markdown report — stable inspection IDs, problem description per inspection, and every affected file with line numbers, ready for an AI agent to read and verify.</li>
+            </ul>
             <h3>1.0.3</h3>
             <ul>
               <li><b>Spring Boot 4 migration support:</b> 29 new inspections cover the Boot 3 to Boot 4 upgrade — Jackson 2 to Jackson 3 package and coordinate moves, Spring Security lambda DSL and chained request matchers, Undertow starter removal, renamed and relocated Boot starters and classes, removed build features, JUnit 4 test runners, and updated test-starter modules.</li>
