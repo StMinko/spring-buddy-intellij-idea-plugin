@@ -2431,5 +2431,13 @@
                     relative-to-action="ProjectViewPopupMenuRefactoringGroup"
             />
         </action>
+        <action
+                id="SpringFormat.ExportInspectionsMarkdown"
+                class="com.sarhan.springformat.export.ExportInspectionsMarkdownAction"
+                text="Export as Markdown"
+                description="Export the selected inspection results as a Markdown report with problem descriptions and affected files with line numbers"
+        >
+            <add-to-group group-id="InspectionToolWindow.TreePopup" anchor="last"/>
+        </action>
     </actions>
 </idea-plugin>
