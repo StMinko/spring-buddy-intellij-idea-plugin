@@ -18,7 +18,6 @@ package com.sarhan.springformat;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -194,15 +193,13 @@ public class RunSpringFormatInspectionsAction extends AnAction {
 
     private static List<ProblemDescriptor> inspectFile(PsiFile psiFile, LocalInspectionToolWrapper wrapper,
                                                        GlobalInspectionContextBase context) {
-        wrapper.initialize(context);
         ProgressIndicator indicator = ProgressManager.getInstance().getProgressIndicator();
         if (indicator == null) {
-            indicator = new EmptyProgressIndicator();
+            return ProgressManager.getInstance().runProcess(
+                    () -> InspectionEngine.runInspectionOnFile(psiFile, wrapper, context),
+                    new EmptyProgressIndicator());
         }
-        Map<LocalInspectionToolWrapper, List<ProblemDescriptor>> descriptors = InspectionEngine.inspectEx(
-                Collections.singletonList(wrapper), psiFile, psiFile.getTextRange(), psiFile.getTextRange(), false,
-                false, true, indicator, (LocalInspectionToolWrapper tool, ProblemDescriptor problem) -> true);
-        return descriptors.getOrDefault(wrapper, Collections.emptyList());
+        return InspectionEngine.runInspectionOnFile(psiFile, wrapper, context);
     }
 
     private static InspectionProfileImpl createProfile(Project project) {

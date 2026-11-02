@@ -28,21 +28,21 @@ import java.util.Map;
 import java.util.Set;
 
 import com.intellij.codeHighlighting.HighlightDisplayLevel;
+import com.intellij.codeInsight.daemon.HighlightDisplayKey;
 import com.intellij.codeInspection.CommonProblemDescriptor;
+import com.intellij.codeInspection.InspectionProfile;
 import com.intellij.codeInspection.ProblemDescriptor;
 import com.intellij.codeInspection.ex.InspectionToolWrapper;
 import com.intellij.codeInspection.ui.InspectionResultsView;
-import com.intellij.codeInspection.ui.InspectionSeverityGroupNode;
 import com.intellij.codeInspection.ui.InspectionTreeNode;
-import com.intellij.codeInspection.ui.InspectionTree;
 import com.intellij.codeInspection.ui.ProblemDescriptionNode;
-import com.intellij.codeInspection.ui.actions.InspectionViewActionBase;
 import com.intellij.openapi.actionSystem.ActionUpdateThread;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.fileChooser.FileChooserFactory;
 import com.intellij.openapi.fileChooser.FileSaverDescriptor;
 import com.intellij.openapi.fileEditor.FileEditorManager;
+import com.intellij.openapi.fileEditor.OpenFileDescriptor;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.project.ProjectUtil;
 import com.intellij.openapi.ui.Messages;
@@ -54,7 +54,10 @@ import com.intellij.psi.PsiDocumentManager;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.util.PsiUtilCore;
+import com.intellij.util.ui.UIUtil;
 import org.jetbrains.annotations.NotNull;
+
+import javax.swing.JTree;
 
 /**
  * Right-click action for the inspection results view. Exports the selected
@@ -72,7 +75,7 @@ public class ExportInspectionsMarkdownAction extends AnAction {
     @Override
     public void actionPerformed(@NotNull AnActionEvent e) {
         Project project = e.getProject();
-        InspectionResultsView view = InspectionViewActionBase.getView(e);
+        InspectionResultsView view = resultsView(e);
         if (project == null || view == null) {
             return;
         }
@@ -83,15 +86,15 @@ public class ExportInspectionsMarkdownAction extends AnAction {
             return;
         }
 
-        List<InspectionMarkdownReport.InspectionSection> sections = buildSections(project, problemNodes);
+        List<InspectionMarkdownReport.InspectionSection> sections = buildSections(view, problemNodes);
         String markdown = InspectionMarkdownReport.build(scopeTitle(view), projectRoot(project),
                 InspectionMarkdownReport.defaultTimestamp(), sections);
-        save(project, markdown, defaultFileName(selectedNodeLabel(view.getTree())));
+        save(project, markdown, defaultFileName(selectedNodeLabel(inspectionTree(view))));
     }
 
     @Override
     public void update(@NotNull AnActionEvent e) {
-        InspectionResultsView view = InspectionViewActionBase.getView(e);
+        InspectionResultsView view = resultsView(e);
         e.getPresentation().setEnabledAndVisible(view != null && view.hasProblems());
     }
 
@@ -100,8 +103,35 @@ public class ExportInspectionsMarkdownAction extends AnAction {
         return ActionUpdateThread.EDT;
     }
 
+    /**
+     * Resolves the inspection results view from the action data context. The
+     * platform provides the view through {@link InspectionResultsView#DATA_KEY};
+     * the internal helper {@code InspectionViewActionBase#getView} does the same.
+     */
+    private static InspectionResultsView resultsView(AnActionEvent e) {
+        InspectionResultsView view = e.getData(InspectionResultsView.DATA_KEY);
+        return view == null || view.isDisposed() ? null : view;
+    }
+
+    /**
+     * Locates the results tree without referencing internal classes. The view
+     * nests exactly one {@link JTree} whose model root is an
+     * {@link InspectionTreeNode}; other child components never match.
+     */
+    private static JTree inspectionTree(InspectionResultsView view) {
+        for (JTree tree : UIUtil.findComponentsOfType(view, JTree.class)) {
+            if (tree.getModel().getRoot() instanceof InspectionTreeNode) {
+                return tree;
+            }
+        }
+        return null;
+    }
+
     private static List<ProblemDescriptionNode> collectProblemNodes(InspectionResultsView view) {
-        InspectionTree tree = view.getTree();
+        JTree tree = inspectionTree(view);
+        if (tree == null) {
+            return List.of();
+        }
         List<InspectionTreeNode> roots = selectedRoots(tree);
         Set<InspectionTreeNode> visited = Collections.newSetFromMap(new IdentityHashMap<>());
         List<ProblemDescriptionNode> result = new ArrayList<>();
@@ -111,10 +141,14 @@ public class ExportInspectionsMarkdownAction extends AnAction {
         return result;
     }
 
-    private static List<InspectionTreeNode> selectedRoots(InspectionTree tree) {
+    private static List<InspectionTreeNode> selectedRoots(JTree tree) {
+        Object modelRoot = tree.getModel().getRoot();
+        if (!(modelRoot instanceof InspectionTreeNode rootNode)) {
+            return List.of();
+        }
         javax.swing.tree.TreePath[] paths = tree.getSelectionPaths();
         if (paths == null || paths.length == 0) {
-            return List.of(tree.getRoot());
+            return List.of(rootNode);
         }
         List<InspectionTreeNode> roots = new ArrayList<>();
         for (javax.swing.tree.TreePath path : paths) {
@@ -124,7 +158,7 @@ public class ExportInspectionsMarkdownAction extends AnAction {
             }
         }
         if (roots.isEmpty()) {
-            return List.of(tree.getRoot());
+            return List.of(rootNode);
         }
         return roots;
     }
@@ -145,8 +179,9 @@ public class ExportInspectionsMarkdownAction extends AnAction {
         }
     }
 
-    private static List<InspectionMarkdownReport.InspectionSection> buildSections(Project project,
+    private static List<InspectionMarkdownReport.InspectionSection> buildSections(InspectionResultsView view,
                                                                                    List<ProblemDescriptionNode> nodes) {
+        Project project = view.getProject();
         Map<String, InspectionToolWrapper<?, ?>> wrappers = new LinkedHashMap<>();
         Map<String, String> levelsBySection = new LinkedHashMap<>();
         Map<String, Map<String, InspectionMarkdownReport.Problem>> problemsBySection = new LinkedHashMap<>();
@@ -158,7 +193,7 @@ public class ExportInspectionsMarkdownAction extends AnAction {
             }
             String sectionKey = wrapper.getShortName();
             wrappers.putIfAbsent(sectionKey, wrapper);
-            levelsBySection.putIfAbsent(sectionKey, levelOf(node, wrapper));
+            levelsBySection.putIfAbsent(sectionKey, levelOf(view, node, wrapper));
             InspectionMarkdownReport.Problem problem = toProblem(project, node);
             if (problem == null) {
                 continue;
@@ -186,25 +221,20 @@ public class ExportInspectionsMarkdownAction extends AnAction {
     }
 
     /**
-     * Resolves the configured severity from the severity group node that
-     * surrounds the problem in the results tree, falling back to the tool's
-     * default level.
+     * Resolves the severity the tool is configured with in the profile of the
+     * run that produced the results view, matching the severity group the
+     * problems are presented under, and falls back to the tool's default
+     * level when the profile has no entry for the tool.
      */
-    /**
-     * Resolves the configured severity from the severity group node that
-     * surrounds the problem in the results tree, falling back to the tool's
-     * default level.
-     */
-    private static String levelOf(ProblemDescriptionNode node, InspectionToolWrapper<?, ?> wrapper) {
-        InspectionTreeNode current = node;
-        while (current != null) {
-            if (current instanceof InspectionSeverityGroupNode groupNode) {
-                HighlightDisplayLevel level = groupNode.getSeverityLevel();
-                if (level != null) {
-                    return level.getName();
-                }
+    private static String levelOf(InspectionResultsView view, ProblemDescriptionNode node,
+                                  InspectionToolWrapper<?, ?> wrapper) {
+        HighlightDisplayKey key = HighlightDisplayKey.find(wrapper.getShortName());
+        InspectionProfile profile = view.getCurrentProfile();
+        if (key != null && profile != null) {
+            HighlightDisplayLevel level = profile.getErrorLevel(key, null);
+            if (level != null) {
+                return level.getName();
             }
-            current = current.getParent() instanceof InspectionTreeNode parent ? parent : null;
         }
         HighlightDisplayLevel fallback = wrapper.getDefaultLevel();
         return fallback == null ? "" : fallback.getName();
@@ -356,7 +386,7 @@ public class ExportInspectionsMarkdownAction extends AnAction {
             FileUtil.writeToFile(file, markdown.getBytes(StandardCharsets.UTF_8));
             VirtualFile virtualFile = VfsUtil.findFileByIoFile(file, true);
             if (virtualFile != null) {
-                FileEditorManager.getInstance(project).openFile(virtualFile, true);
+                FileEditorManager.getInstance(project).openEditor(new OpenFileDescriptor(project, virtualFile), true);
             }
         } catch (IOException ex) {
             Messages.showErrorDialog(project, "Could not save report: " + ex.getMessage(), "Spring Buddy");
@@ -385,13 +415,16 @@ public class ExportInspectionsMarkdownAction extends AnAction {
      * or {@code null} when nothing is selected, several nodes are selected, or
      * the whole tree (root) is selected.
      */
-    private static String selectedNodeLabel(InspectionTree tree) {
+    private static String selectedNodeLabel(JTree tree) {
+        if (tree == null) {
+            return null;
+        }
         javax.swing.tree.TreePath[] paths = tree.getSelectionPaths();
         if (paths == null || paths.length != 1) {
             return null;
         }
         Object last = paths[0].getLastPathComponent();
-        if (!(last instanceof InspectionTreeNode node) || node == tree.getRoot()) {
+        if (!(last instanceof InspectionTreeNode node) || node == tree.getModel().getRoot()) {
             return null;
         }
         String label;
