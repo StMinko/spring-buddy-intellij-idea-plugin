@@ -16,16 +16,23 @@
 
 package com.sarhan.dataFlow;
 
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import com.intellij.codeInspection.AbstractBaseJavaLocalInspectionTool;
 import com.intellij.codeInspection.ProblemHighlightType;
 import com.intellij.codeInspection.ProblemsHolder;
 import com.intellij.psi.*;
+import com.intellij.psi.search.LocalSearchScope;
+import com.intellij.psi.search.searches.ReferencesSearch;
+import com.intellij.psi.util.PsiTreeUtil;
 import com.sarhan.dataFlow.base.LazyLoadingSinkDetector;
 import com.sarhan.dataFlow.base.SpringEntitySourceDetector;
 import com.sarhan.springformat.inspection.SpringInspectionUtil;
+import com.sarhan.springformat.inspection.SpringRemainingPitfallInspection;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -71,6 +78,9 @@ public class SpringLazyInitializationPredictionDataFlowInspection extends Abstra
                 if (isContextTransactional(method)) {
                     return; // entities are managed inside a transaction
                 }
+                if (isPrivateMethodCoveredByTransactionalCaller(method)) {
+                    return;
+                }
                 if (isGetter(method)) {
                     return; // read-only, not a lazy-loading entry point
                 }
@@ -99,15 +109,16 @@ public class SpringLazyInitializationPredictionDataFlowInspection extends Abstra
         }
 
         TaintedEntityTracker tracker = new TaintedEntityTracker();
+        Map<PsiVariable, PsiMethod> sourceMethods = new HashMap<>();
 
         // Pass 1: seed taint from repository / EntityManager sources
-        body.accept(new SourceSeedingVisitor(tracker, sourceDetector));
+        body.accept(new SourceSeedingVisitor(tracker, sourceDetector, sourceMethods));
 
         // Fixed-point alias propagation
         tracker.propagateAliases(body);
 
         // Pass 2: detect lazy-loading sinks
-        body.accept(new LazyGetterSinkVisitor(tracker, holder, reportedElements));
+        body.accept(new LazyGetterSinkVisitor(tracker, sourceMethods, holder, reportedElements));
     }
 
     // -----------------------------------------------------------------------
@@ -157,6 +168,18 @@ public class SpringLazyInitializationPredictionDataFlowInspection extends Abstra
         }
 
         return false;
+    }
+
+    private static boolean isPrivateMethodCoveredByTransactionalCaller(@NotNull PsiMethod method) {
+        if (!method.hasModifierProperty(PsiModifier.PRIVATE)) {
+            return false;
+        }
+        PsiClass containingClass = method.getContainingClass();
+        if (containingClass == null) {
+            return false;
+        }
+        boolean hasInClassCaller = !ReferencesSearch.search(method, new LocalSearchScope(containingClass)).findAll().isEmpty();
+        return hasInClassCaller && SpringRemainingPitfallInspection.hasTransactionalCallerCoverage(method);
     }
 
     /**
@@ -225,11 +248,14 @@ public class SpringLazyInitializationPredictionDataFlowInspection extends Abstra
 
         private final TaintedEntityTracker tracker;
         private final SpringEntitySourceDetector sourceDetector;
+        private final Map<PsiVariable, PsiMethod> sourceMethods;
 
         SourceSeedingVisitor(@NotNull TaintedEntityTracker tracker,
-                             @NotNull SpringEntitySourceDetector sourceDetector) {
+                             @NotNull SpringEntitySourceDetector sourceDetector,
+                             @NotNull Map<PsiVariable, PsiMethod> sourceMethods) {
             this.tracker = tracker;
             this.sourceDetector = sourceDetector;
+            this.sourceMethods = sourceMethods;
         }
 
         @Override
@@ -251,14 +277,23 @@ public class SpringLazyInitializationPredictionDataFlowInspection extends Abstra
         @Override
         public void visitAssignmentExpression(@NotNull PsiAssignmentExpression expr) {
             super.visitAssignmentExpression(expr);
-            PsiExpression rhs = expr.getRExpression();
-            if (rhs == null || !isDetachedSource(rhs)) {
+            PsiExpression lhs = expr.getLExpression();
+            if (!(lhs instanceof PsiReferenceExpression ref)
+                    || !(ref.resolve() instanceof PsiVariable var)) {
                 return;
             }
-            PsiExpression lhs = expr.getLExpression();
-            if (lhs instanceof PsiReferenceExpression ref
-                    && ref.resolve() instanceof PsiVariable var) {
-                this.tracker.taint(var);
+            this.sourceMethods.remove(var);
+            PsiExpression rhs = expr.getRExpression();
+            if (rhs == null) {
+                return;
+            }
+            PsiMethod sourceMethod = directSourceMethod(rhs);
+            if (sourceMethod == null && !isDetachedSource(rhs)) {
+                return;
+            }
+            this.tracker.taint(var);
+            if (sourceMethod != null) {
+                this.sourceMethods.put(var, sourceMethod);
             }
         }
 
@@ -267,9 +302,26 @@ public class SpringLazyInitializationPredictionDataFlowInspection extends Abstra
             if (this.tracker.isTainted(variable)) {
                 return;
             }
-            if (initializer != null && isDetachedSource(initializer)) {
-                this.tracker.taint(variable);
+            if (initializer == null) {
+                return;
             }
+            PsiMethod sourceMethod = directSourceMethod(initializer);
+            if (sourceMethod != null || isDetachedSource(initializer)) {
+                this.tracker.taint(variable);
+                if (sourceMethod != null) {
+                    this.sourceMethods.put(variable, sourceMethod);
+                }
+            }
+        }
+
+        private PsiMethod directSourceMethod(@NotNull PsiExpression expression) {
+            if (expression instanceof PsiMethodCallExpression call) {
+                PsiMethod resolved = call.resolveMethod();
+                if (resolved != null && this.sourceDetector.isDetachedEntitySource(resolved)) {
+                    return resolved;
+                }
+            }
+            return null;
         }
 
         /**
@@ -312,13 +364,16 @@ public class SpringLazyInitializationPredictionDataFlowInspection extends Abstra
     private static final class LazyGetterSinkVisitor extends JavaRecursiveElementWalkingVisitor {
 
         private final TaintedEntityTracker tracker;
+        private final Map<PsiVariable, PsiMethod> sourceMethods;
         private final ProblemsHolder holder;
         private final Set<PsiElement> reportedElements;
 
         LazyGetterSinkVisitor(@NotNull TaintedEntityTracker tracker,
+                              @NotNull Map<PsiVariable, PsiMethod> sourceMethods,
                               @NotNull ProblemsHolder holder,
                               @NotNull Set<PsiElement> reportedElements) {
             this.tracker = tracker;
+            this.sourceMethods = sourceMethods;
             this.holder = holder;
             this.reportedElements = reportedElements;
         }
@@ -343,10 +398,87 @@ public class SpringLazyInitializationPredictionDataFlowInspection extends Abstra
             if (!this.tracker.isTaintedExpression(qualifier)) {
                 return;
             }
+            if (isEntityIdentifierRead(call)) {
+                return;
+            }
+            PsiMethod sourceMethod = sourceMethodFor(qualifier);
+            if (sourceMethod != null && isAssociationFetchedBySource(sourceMethod, resolved)) {
+                return;
+            }
 
             registerIfNew(call,
                     "LazyInitializationException: entity loaded in a different @Transactional method "
                             + "is accessed outside a transaction boundary");
+        }
+
+        private PsiMethod sourceMethodFor(PsiExpression expression) {
+            if (expression instanceof PsiParenthesizedExpression parenthesized) {
+                return sourceMethodFor(parenthesized.getExpression());
+            }
+            if (expression instanceof PsiReferenceExpression reference
+                    && reference.resolve() instanceof PsiVariable variable) {
+                return this.sourceMethods.get(variable);
+            }
+            return null;
+        }
+
+        private static boolean isEntityIdentifierRead(PsiMethodCallExpression lazyCall) {
+            PsiMethodCallExpression enclosingCall = PsiTreeUtil.getParentOfType(lazyCall, PsiMethodCallExpression.class, true);
+            if (enclosingCall == null || enclosingCall.getMethodExpression().getQualifierExpression() != lazyCall) {
+                return false;
+            }
+            PsiMethod method = enclosingCall.resolveMethod();
+            return method != null && "getId".equals(method.getName())
+                    && method.getParameterList().getParametersCount() == 0;
+        }
+
+        private static boolean isAssociationFetchedBySource(PsiMethod sourceMethod, PsiMethod getter) {
+            String property = getterPropertyName(getter.getName());
+            if (property == null) {
+                return false;
+            }
+            PsiModifierList modifiers = sourceMethod.getModifierList();
+            PsiAnnotation query = SpringInspectionUtil.findAnnotation(modifiers,
+                    "org.springframework.data.jpa.repository.Query", "Query");
+            PsiAnnotationMemberValue queryValue = query != null ? query.findAttributeValue("value") : null;
+            if (queryValue != null && Pattern.compile("\\bjoin\\s+fetch\\s+\\w+\\." + Pattern.quote(property) + "\\b",
+                            Pattern.CASE_INSENSITIVE)
+                    .matcher(queryValue.getText()).find()) {
+                return true;
+            }
+            PsiAnnotation entityGraph = SpringInspectionUtil.findAnnotation(modifiers,
+                    "org.springframework.data.jpa.repository.EntityGraph", "EntityGraph");
+            return entityGraph != null && hasEntityGraphPath(entityGraph.findAttributeValue("attributePaths"), property);
+        }
+
+        private static boolean hasEntityGraphPath(PsiAnnotationMemberValue paths, String property) {
+            if (paths instanceof PsiArrayInitializerMemberValue array) {
+                for (PsiAnnotationMemberValue value : array.getInitializers()) {
+                    if (isEntityGraphPath(value, property)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            return isEntityGraphPath(paths, property);
+        }
+
+        private static boolean isEntityGraphPath(PsiAnnotationMemberValue value, String property) {
+            if (!(value instanceof PsiLiteralExpression literal) || !(literal.getValue() instanceof String path)) {
+                return false;
+            }
+            return property.equals(path) || path.startsWith(property + ".");
+        }
+
+        private static String getterPropertyName(String methodName) {
+            int prefixLength = methodName.startsWith("get") ? 3
+                    : methodName.startsWith("is") ? 2
+                    : methodName.startsWith("fetch") ? 5
+                    : 0;
+            if (prefixLength == 0 || methodName.length() <= prefixLength) {
+                return null;
+            }
+            return Character.toLowerCase(methodName.charAt(prefixLength)) + methodName.substring(prefixLength + 1);
         }
 
         private void registerIfNew(@NotNull PsiElement element, @NotNull String message) {

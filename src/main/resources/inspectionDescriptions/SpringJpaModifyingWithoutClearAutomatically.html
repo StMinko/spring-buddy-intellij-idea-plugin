@@ -6,5 +6,14 @@ Reports Spring Data JPA <code>@Modifying</code> annotations that don't set
     Without it, entities cached in the persistence context can become stale after a bulk update or
     delete query, leading to subtle read-after-write bugs. The quick-fix adds the attribute.
 </p>
+<p>
+    For methods with callers, the inspection reports only when the same scope reads an entity of the
+    bulk query's type before the modifying call and reads it again afterward. The scope is the
+    enclosing method or the innermost <code>TransactionTemplate</code> or
+    <code>TransactionOperations</code> callback. The entity type comes from the JPQL update/delete
+    query or the repository's first generic type argument and is matched by simple class name.
+    Calls across methods are not followed; uncalled methods and cases without a determinable entity
+    type remain reported.
+</p>
 </body>
 </html>

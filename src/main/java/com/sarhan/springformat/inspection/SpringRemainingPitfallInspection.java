@@ -25,23 +25,32 @@ import com.intellij.openapi.project.Project;
 import com.intellij.psi.JavaElementVisitor;
 import com.intellij.psi.JavaRecursiveElementVisitor;
 import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiAnonymousClass;
 import com.intellij.psi.PsiCatchSection;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiCodeBlock;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiElementVisitor;
 import com.intellij.psi.PsiExpression;
+import com.intellij.psi.PsiExpressionList;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiIdentifier;
 import com.intellij.psi.PsiJavaCodeReferenceElement;
+import com.intellij.psi.PsiLambdaExpression;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiModifierList;
+import com.intellij.psi.PsiNewExpression;
+import com.intellij.psi.PsiParenthesizedExpression;
+import com.intellij.psi.PsiReference;
 import com.intellij.psi.PsiThrowStatement;
 import com.intellij.psi.PsiTryStatement;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeElement;
+import com.intellij.psi.search.LocalSearchScope;
+import com.intellij.psi.search.searches.ReferencesSearch;
+import com.intellij.psi.util.PsiTreeUtil;
 import com.sarhan.springformat.settings.SpringBootTarget;
 import com.sarhan.springformat.settings.SpringBootVersionResolver;
 import org.jetbrains.annotations.NotNull;
@@ -112,11 +121,17 @@ public class SpringRemainingPitfallInspection extends AbstractBaseJavaLocalInspe
                     return;
                 }
                 if (SpringRemainingPitfallInspection.this.kind == Kind.SERVICE_MULTIPLE_REPOSITORIES_WITHOUT_TRANSACTION
-                        && isServiceMethod(method) && !hasTransactionalBoundary(method)
+                        && isServiceMethod(method)
+                        && (method.hasModifierProperty(PsiModifier.PRIVATE)
+                        ? !hasTransactionalCallerCoverage(method)
+                        : !hasTransactionalBoundary(method))
                         && countDistinctRepositoryWriteFields(method) >= 2) {
-                    registerError(method, holder,
-                            "Service method uses multiple repositories without an explicit @Transactional boundary",
-                            new AddTransactionalFix());
+                    String message = "Service method uses multiple repositories without an explicit @Transactional boundary";
+                    if (method.hasModifierProperty(PsiModifier.PRIVATE)) {
+                        registerError(method, holder, message);
+                    } else {
+                        registerError(method, holder, message, new AddTransactionalFix());
+                    }
                 }
                 if (SpringRemainingPitfallInspection.this.kind == Kind.SCHEDULED_PROXY && hasAnnotation(method.getModifierList(), "Scheduled")
                         && (method.hasModifierProperty(PsiModifier.PRIVATE) || method.hasModifierProperty(PsiModifier.STATIC)
@@ -258,6 +273,9 @@ public class SpringRemainingPitfallInspection extends AbstractBaseJavaLocalInspe
             @Override
             public void visitMethodCallExpression(@NotNull PsiMethodCallExpression expression) {
                 super.visitMethodCallExpression(expression);
+                if (isInsideTransactionTemplateCallback(expression)) {
+                    return;
+                }
                 PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
                 if (qualifier == null) {
                     return;
@@ -275,7 +293,69 @@ public class SpringRemainingPitfallInspection extends AbstractBaseJavaLocalInspe
         return repositories.size();
     }
 
-    private static boolean isWriteOperation(String methodName) {
+    public static boolean hasTransactionalCallerCoverage(PsiMethod method) {
+        PsiClass containingClass = method.getContainingClass();
+        return containingClass != null
+                && hasTransactionalCallerCoverage(method, containingClass, new java.util.HashSet<>());
+    }
+
+    private static boolean hasTransactionalCallerCoverage(PsiMethod method, PsiClass scope, java.util.Set<PsiMethod> visited) {
+        if (!visited.add(method)) {
+            return true;
+        }
+        for (PsiReference reference : ReferencesSearch.search(method, new LocalSearchScope(scope)).findAll()) {
+            if (isInsideTransactionTemplateCallback(reference.getElement())) {
+                continue;
+            }
+            PsiMethodCallExpression call = PsiTreeUtil.getParentOfType(reference.getElement(), PsiMethodCallExpression.class);
+            if (call == null || call.resolveMethod() != method) {
+                return false;
+            }
+            PsiMethod caller = PsiTreeUtil.getParentOfType(call, PsiMethod.class);
+            if (caller == null) {
+                return false;
+            }
+            if (!caller.hasModifierProperty(PsiModifier.PRIVATE) && hasTransactionalBoundary(caller)) {
+                continue;
+            }
+            if (!caller.hasModifierProperty(PsiModifier.PRIVATE)
+                    || !hasTransactionalCallerCoverage(caller, scope, visited)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static boolean isInsideTransactionTemplateCallback(PsiElement element) {
+        for (PsiElement current = element; current != null; current = current.getParent()) {
+            if (current instanceof PsiLambdaExpression || current instanceof PsiAnonymousClass) {
+                PsiElement argument = current instanceof PsiAnonymousClass ? current.getParent() : current;
+                while (argument != null && argument.getParent() instanceof PsiParenthesizedExpression) {
+                    argument = argument.getParent();
+                }
+                if (argument != null && argument.getParent() instanceof PsiExpressionList arguments
+                        && arguments.getParent() instanceof PsiMethodCallExpression call
+                        && isTransactionTemplateCall(call)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    static boolean isTransactionTemplateCall(PsiMethodCallExpression call) {
+        String methodName = call.getMethodExpression().getReferenceName();
+        if (!"execute".equals(methodName) && !"executeWithoutResult".equals(methodName)) {
+            return false;
+        }
+        PsiMethod target = call.resolveMethod();
+        PsiClass containingClass = target != null ? target.getContainingClass() : null;
+        String qualifiedName = containingClass != null ? containingClass.getQualifiedName() : null;
+        return "org.springframework.transaction.support.TransactionTemplate".equals(qualifiedName)
+                || "org.springframework.transaction.support.TransactionOperations".equals(qualifiedName);
+    }
+
+    static boolean isWriteOperation(String methodName) {
         return methodName.startsWith("save") || methodName.equals("delete") || methodName.equals("remove")
                 || methodName.startsWith("delete") || methodName.startsWith("remove")
                 || methodName.equals("persist") || methodName.equals("merge") || methodName.equals("flush");
@@ -312,7 +392,7 @@ public class SpringRemainingPitfallInspection extends AbstractBaseJavaLocalInspe
                 super.visitTryStatement(statement);
                 for (PsiCatchSection section : statement.getCatchSections()) {
                     if (section.getCatchType() != null && isBroadExceptionType(section.getCatchType().getCanonicalText())
-                            && !rethrows(section.getCatchBlock())) {
+                            && !rethrows(section.getCatchBlock()) && !logsFailure(section.getCatchBlock())) {
                         PsiTypeElement typeElem = (section.getParameter() != null)
                                 ? section.getParameter().getTypeElement()
                                 : null;
@@ -324,6 +404,42 @@ public class SpringRemainingPitfallInspection extends AbstractBaseJavaLocalInspe
                 }
             }
         });
+    }
+
+    private static boolean logsFailure(PsiCodeBlock block) {
+        if (block == null) {
+            return false;
+        }
+        boolean[] found = {false};
+        block.accept(new JavaRecursiveElementVisitor() {
+            @Override
+            public void visitMethodCallExpression(@NotNull PsiMethodCallExpression expression) {
+                super.visitMethodCallExpression(expression);
+                PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
+                String methodName = expression.getMethodExpression().getReferenceName();
+                if (qualifier != null && isLoggerQualifier(qualifier) && isLogMethod(methodName)) {
+                    found[0] = true;
+                }
+            }
+        });
+        return found[0];
+    }
+
+    private static boolean isLoggerQualifier(PsiExpression qualifier) {
+        String text = qualifier.getText();
+        if ("log".equalsIgnoreCase(text) || "logger".equalsIgnoreCase(text)) {
+            return true;
+        }
+        PsiType type = qualifier.getType();
+        PsiClass resolved = type != null ? SpringInspectionUtil.resolvedClass(type) : null;
+        String name = resolved != null ? resolved.getName() : null;
+        return "Logger".equals(name) || "Log".equals(name);
+    }
+
+    private static boolean isLogMethod(String methodName) {
+        return "info".equals(methodName) || "warn".equals(methodName) || "warning".equals(methodName)
+                || "error".equals(methodName) || "severe".equals(methodName) || "fatal".equals(methodName)
+                || "log".equals(methodName);
     }
 
     private static boolean rethrows(PsiCodeBlock block) {

@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.sarhan.springformat"
-version = "1.0.4"
+version = "1.0.5"
 
 repositories {
     mavenCentral()
@@ -42,7 +42,7 @@ dependencies {
 intellijPlatform {
     pluginConfiguration {
         name = "Spring Buddy"
-        version = "1.0.4"
+        version = "1.0.5"
         description = """
             <h2>Make invisible Spring runtime behavior visible.</h2>
               <p>
@@ -70,6 +70,21 @@ intellijPlatform {
               </p>
         """.trimIndent()
         changeNotes = """
+            <h3>1.0.5</h3>
+            <ul>
+              <li><b>Fewer false positives in service swallowed-exception checks:</b> a broad <code>catch</code> that logs the failure at info level or higher (<code>info</code>, <code>warn</code>, <code>error</code>, and similar) is no longer reported. A catch that only logs at debug level is still reported.</li>
+              <li><b>Fewer false positives in multiple-repositories-without-transaction checks:</b> repository writes inside <code>TransactionTemplate</code> or <code>TransactionOperations</code> callbacks are recognized as transactional. A private helper is no longer reported when every caller in its class is covered by a transaction.</li>
+              <li><b>Fewer false positives in transactional self-invocation checks:</b> calls are not reported when the callee does not change transaction semantics; read-only callers invoking writable methods and callees with other transaction attribute overrides remain reported.</li>
+              <li><b>Fewer false positives in transactional event-listener checks:</b> listeners that only delegate to another bean or write inside a <code>TransactionTemplate</code> or <code>TransactionOperations</code> callback are no longer reported. Repository writes in the listener or same-class helpers remain reported.</li>
+              <li><b>Fewer false positives in multiple-write-without-transaction checks:</b> writes inside <code>TransactionTemplate</code> or <code>TransactionOperations</code> callbacks are excluded, and private helpers are covered when every in-class caller path reaches a transaction boundary.</li>
+              <li><b>Fewer false positives in weak-isolation checks:</b> read-only transactions and methods that take pessimistic locks through repository <code>@Lock</code> or <code>@Query</code> methods with <code>FOR UPDATE</code> or <code>FOR NO KEY UPDATE</code> are no longer reported, including same-class helper calls.</li>
+              <li><b>Fewer false positives in long-running-operation checks:</b> generic calls such as <code>get</code> and <code>execute</code> are no longer treated as slow work by name alone; reports use <code>Thread.sleep</code> or client-like receiver types.</li>
+              <li><b>Fewer false positives in JPA bulk-update checks:</b> <code>@Modifying</code> methods are reported only when a caller reads the same entity type before and after the bulk operation in the same method or transaction-template callback. Uncalled methods remain reported.</li>
+              <li><b>Fewer false positives in checked-exception rollback checks:</b> methods are reported only when a checked exception can escape the body; read-only transactions without detected writes are exempt.</li>
+              <li><b>Fewer false positives in lazy-initialization prediction:</b> identifier-only proxy access, transaction-covered private helpers, and associations fetched by the source method's <code>JOIN FETCH</code> or <code>@EntityGraph</code> are no longer reported.</li>
+              <li><b>Fixed:</b> a private service method is no longer offered the <code>@Transactional</code> quick fix, because Spring's proxy would ignore it.</li>
+              <li><b>Markdown export:</b> more reliable severity and inspection-profile resolution when exporting findings.</li>
+            </ul>
             <h3>1.0.4</h3>
             <ul>
               <li><b>Markdown export:</b> right-click the inspection results view and export the selected findings as a machine-friendly Markdown report — stable inspection IDs, problem description per inspection, and every affected file with line numbers, ready for an AI agent to read and verify.</li>

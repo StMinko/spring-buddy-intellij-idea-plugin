@@ -18,6 +18,7 @@ package com.sarhan.springformat.inspection;
 
 import com.intellij.codeInsight.intention.IntentionAction;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import org.assertj.core.api.Assertions;
 
 /**
  * @author Akmal Sarhan
@@ -116,11 +117,78 @@ public class SpringTransactionalPrivateMethodInspectionTest extends BasePlatform
         this.myFixture.configureByText("Sample.java", """
                 class Sample {
                     @Transactional
-                    void <warning descr="Checked exception may not trigger transaction rollback; add rollbackFor/rollbackOn">save</warning>() throws MyCheckedException { }
+                    void save() throws MyCheckedException { throw new MyCheckedException(); }
                     static class MyCheckedException extends Exception { }
                 }
                 """);
-        this.myFixture.checkHighlighting(false, false, true, true);
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .as("a body-thrown checked exception is reported")
+                .anyMatch(highlight -> "Checked exception may not trigger transaction rollback; add rollbackFor/rollbackOn"
+                        .equals(highlight.getDescription()));
+    }
+
+    public void testDoesNotReportDeclaredCheckedExceptionThatBodyDoesNotThrow() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.CheckedException());
+        this.myFixture.configureByText("Sample.java", """
+                class Sample {
+                    @Transactional
+                    void save() throws MyCheckedException { }
+                    static class MyCheckedException extends Exception { }
+                }
+                """);
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .as("a declared exception that the body cannot throw is not reported")
+                .noneMatch(highlight -> "Checked exception may not trigger transaction rollback; add rollbackFor/rollbackOn"
+                        .equals(highlight.getDescription()));
+    }
+
+    public void testDoesNotReportCheckedExceptionCaughtInsideMethod() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.CheckedException());
+        this.myFixture.configureByText("Sample.java", """
+                class Sample {
+                    @Transactional
+                    void save() throws MyCheckedException {
+                        try { throw new MyCheckedException(); } catch (MyCheckedException ignored) { }
+                    }
+                    static class MyCheckedException extends Exception { }
+                }
+                """);
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .as("caught exceptions do not trigger a rollback warning")
+                .noneMatch(highlight -> "Checked exception may not trigger transaction rollback; add rollbackFor/rollbackOn"
+                        .equals(highlight.getDescription()));
+    }
+
+    public void testDoesNotReportCheckedExceptionInReadOnlyMethod() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.CheckedException());
+        this.myFixture.configureByText("Sample.java", """
+                class Sample {
+                    @Transactional(readOnly = true)
+                    void save() throws MyCheckedException { throw new MyCheckedException(); }
+                    static class MyCheckedException extends Exception { }
+                }
+                """);
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .as("read-only methods without writes are exempt")
+                .noneMatch(highlight -> "Checked exception may not trigger transaction rollback; add rollbackFor/rollbackOn"
+                        .equals(highlight.getDescription()));
+    }
+
+    public void testReportsCheckedExceptionThrownByCalledMethod() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.CheckedException());
+        this.myFixture.configureByText("Sample.java", """
+                class Sample {
+                    @Transactional
+                    void save() throws MyBaseException { helper(); }
+                    void helper() throws MyCheckedException { throw new MyCheckedException(); }
+                    static class MyBaseException extends Exception { }
+                    static class MyCheckedException extends MyBaseException { }
+                }
+                """);
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .as("checked exceptions propagated by a called method are reported")
+                .anyMatch(highlight -> "Checked exception may not trigger transaction rollback; add rollbackFor/rollbackOn"
+                        .equals(highlight.getDescription()));
     }
 
     public void testDoesNotReportCheckedExceptionCoveredByRollbackRule() {
@@ -430,6 +498,51 @@ public class SpringTransactionalPrivateMethodInspectionTest extends BasePlatform
         this.myFixture.checkHighlighting(false, false, true, true);
     }
 
+    public void testDoesNotReportInMemoryGetOrTransactionExecuteInsideTransaction() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.LongRunningOperation());
+        this.myFixture.configureByText("Sample.java", """
+                import java.util.List;
+                import java.util.Map;
+                import java.util.Optional;
+                @interface Transactional { }
+                class Sample {
+                    Map<String, String> values;
+                    Optional<String> optional;
+                    List<String> items;
+                    TransactionTemplate transactionTemplate;
+                    @Transactional
+                    void load() {
+                        this.values.get("key");
+                        this.optional.get();
+                        this.items.get(0);
+                        this.transactionTemplate.execute();
+                    }
+                }
+                class TransactionTemplate { void execute() { } }
+                """);
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .noneMatch(highlight -> "Long-running work inside @Transactional may hold a database connection too long"
+                        .equals(highlight.getDescription()));
+    }
+
+    public void testReportsClientCallInsideTransactionByReceiverType() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.LongRunningOperation());
+        this.myFixture.configureByText("Sample.java", """
+                @interface Transactional { }
+                class Sample {
+                    PaymentClient payments;
+                    @Transactional
+                    void charge() {
+                        this.payments.charge();
+                    }
+                }
+                interface PaymentClient { void charge(); }
+                """);
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .anyMatch(highlight -> "Long-running work inside @Transactional may hold a database connection too long"
+                        .equals(highlight.getDescription()));
+    }
+
     public void testReportsTransactionalOnIntegrationTestClass() {
         this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.TransactionalTest());
         this.myFixture.configureByText("UserServiceIT.java", """
@@ -478,6 +591,135 @@ public class SpringTransactionalPrivateMethodInspectionTest extends BasePlatform
                     @Entity
                     static class User { }
                 }
+                """);
+        this.myFixture.checkHighlighting(false, false, true, true);
+    }
+
+    public void testDoesNotReportWeakIsolationForReadOnlyMethod() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.WeakIsolation());
+        this.myFixture.configureByText("Sample.java", """
+                @interface Transactional { boolean readOnly() default false; }
+                class Sample {
+                    UserRepository repository;
+                    @Transactional(readOnly = true)
+                    void load() {
+                        this.repository.findById(1L);
+                        this.repository.findById(2L);
+                    }
+                    @Transactional
+                    void <error descr="Multiple reads with default/weak isolation can allow non-repeatable reads">loadWritable</error>() {
+                        this.repository.findById(1L);
+                        this.repository.findById(2L);
+                    }
+                }
+                interface UserRepository { User findById(long id); }
+                class User { }
+                """);
+        this.myFixture.checkHighlighting(true, false, true, true);
+    }
+
+    public void testDoesNotReportWeakIsolationWhenRepositoryReadUsesLockAnnotation() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.WeakIsolation());
+        this.myFixture.configureByText("Sample.java", """
+                @interface Transactional { boolean readOnly() default false; }
+                @interface Lock { }
+                class Sample {
+                    UserRepository repository;
+                    @Transactional
+                    void load() {
+                        this.repository.findByIdForUpdate(1L);
+                        this.repository.findByIdForUpdate(2L);
+                    }
+                    @Transactional
+                    void <error descr="Multiple reads with default/weak isolation can allow non-repeatable reads">loadWithoutLock</error>() {
+                        this.repository.findById(1L);
+                        this.repository.findById(2L);
+                    }
+                }
+                interface UserRepository {
+                    User findById(long id);
+                    @Lock User findByIdForUpdate(long id);
+                }
+                class User { }
+                """);
+        this.myFixture.checkHighlighting(true, false, true, true);
+    }
+
+    public void testDoesNotReportWeakIsolationWhenRepositoryQueryUsesForUpdate() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.WeakIsolation());
+        this.myFixture.configureByText("Sample.java", """
+                @interface Transactional { boolean readOnly() default false; }
+                @interface Query { String value(); }
+                class Sample {
+                    UserRepository repository;
+                    @Transactional
+                    void load() {
+                        this.repository.findByIdForUpdate(1L);
+                        this.repository.findById(2L);
+                    }
+                    @Transactional
+                    void loadWithNoKeyUpdate() {
+                        this.repository.findByIdNoKeyUpdate(1L);
+                        this.repository.findById(2L);
+                    }
+                    @Transactional
+                    void <error descr="Multiple reads with default/weak isolation can allow non-repeatable reads">loadWithoutLock</error>() {
+                        this.repository.findById(1L);
+                        this.repository.findById(2L);
+                    }
+                }
+                interface UserRepository {
+                    @Query("select u from User u where u.id = ?1 FOR UPDATE") User findByIdForUpdate(long id);
+                    @Query("select u from User u where u.id = ?1 FOR NO KEY UPDATE") User findByIdNoKeyUpdate(long id);
+                    User findById(long id);
+                }
+                class User { }
+                """);
+        this.myFixture.checkHighlighting(true, false, true, true);
+    }
+
+    public void testDoesNotReportWeakIsolationWhenLockIsTakenInSameClassHelper() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.WeakIsolation());
+        this.myFixture.configureByText("Sample.java", """
+                @interface Transactional { boolean readOnly() default false; }
+                @interface Lock { }
+                class Sample {
+                    UserRepository repository;
+                    @Transactional
+                    void load() {
+                        this.lockRow();
+                        this.repository.findById(1L);
+                        this.repository.findById(2L);
+                    }
+                    @Transactional
+                    void <error descr="Multiple reads with default/weak isolation can allow non-repeatable reads">loadWithoutLock</error>() {
+                        this.repository.findById(1L);
+                        this.repository.findById(2L);
+                    }
+                    private void lockRow() { this.repository.findByIdForUpdate(1L); }
+                }
+                interface UserRepository {
+                    User findById(long id);
+                    @Lock User findByIdForUpdate(long id);
+                }
+                class User { }
+                """);
+        this.myFixture.checkHighlighting(true, false, true, true);
+    }
+
+    public void testReportsWeakIsolationForMultipleReadsWithoutLock() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.WeakIsolation());
+        this.myFixture.configureByText("Sample.java", """
+                @interface Transactional { boolean readOnly() default false; }
+                class Sample {
+                    UserRepository repository;
+                    @Transactional
+                    void <warning descr="Multiple reads with default/weak isolation can allow non-repeatable reads">load</warning>() {
+                        this.repository.findById(1L);
+                        this.repository.findById(2L);
+                    }
+                }
+                class User { }
                 """);
         this.myFixture.checkHighlighting(false, false, true, true);
     }
@@ -574,6 +816,86 @@ public class SpringTransactionalPrivateMethodInspectionTest extends BasePlatform
         this.myFixture.checkHighlighting(false, false, true, true);
     }
 
+    public void testReportsUncalledPrivateHelperWithMultipleWrites() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.MultipleWritesWithoutTransaction());
+        this.myFixture.configureByText("Sample.java", """
+                class Sample {
+                    Repository repository;
+                    private void <error descr="Method performs multiple write operations without @Transactional">persist</error>() {
+                        repository.save();
+                        repository.delete();
+                    }
+                    interface Repository { void save(); void delete(); }
+                }
+                """);
+        this.myFixture.checkHighlighting(false, false, true, true);
+    }
+
+    public void testDoesNotReportMultipleWritesInsideTransactionTemplateCallback() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.MultipleWritesWithoutTransaction());
+        this.myFixture.configureByText("Sample.java", """
+                package org.springframework.transaction.support;
+                class Sample {
+                    Repository repository;
+                    TransactionTemplate transactionTemplate;
+                    void update() {
+                        transactionTemplate.execute(() -> {
+                            repository.save();
+                            repository.delete();
+                            return null;
+                        });
+                    }
+                }
+                class TransactionTemplate {
+                    <T> T execute(Callback<T> callback) { return callback.apply(); }
+                }
+                interface Callback<T> { T apply(); }
+                interface Repository { void save(); void delete(); }
+                """);
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .as("writes inside a transaction-template callback are not reported")
+                .noneMatch(highlight -> "Method performs multiple write operations without @Transactional"
+                        .equals(highlight.getDescription()));
+    }
+
+    public void testDoesNotReportPrivateHelperReachedThroughPrivateChainFromTransactionalMethod() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.MultipleWritesWithoutTransaction());
+        this.myFixture.configureByText("Sample.java", """
+                class Sample {
+                    Repository repository;
+                    @Transactional
+                    void update() { prepare(); }
+                    private void prepare() { persist(); }
+                    private void persist() {
+                        repository.save();
+                        repository.delete();
+                    }
+                    interface Repository { void save(); void delete(); }
+                }
+                """);
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .as("private writes reached through a transactional caller chain are not reported")
+                .noneMatch(highlight -> "Method performs multiple write operations without @Transactional"
+                        .equals(highlight.getDescription()));
+    }
+
+    public void testReportsPrivateHelperReachedFromNonTransactionalMethod() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.MultipleWritesWithoutTransaction());
+        this.myFixture.configureByText("Sample.java", """
+                class Sample {
+                    Repository repository;
+                    public void update() { prepare(); }
+                    private void prepare() { persist(); }
+                    private void <error descr="Method performs multiple write operations without @Transactional">persist</error>() {
+                        repository.save();
+                        repository.delete();
+                    }
+                    interface Repository { void save(); void delete(); }
+                }
+                """);
+        this.myFixture.checkHighlighting(false, false, true, true);
+    }
+
     public void testReportsAndFixesTransactionalAbstractClass() {
         this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.AbstractClassTransaction());
         this.myFixture.configureByText("Sample.java", """
@@ -628,6 +950,58 @@ public class SpringTransactionalPrivateMethodInspectionTest extends BasePlatform
                     @Async
                     @TransactionalEventListener
                     public void <warning descr="Potential data race: @Async with @TransactionalEventListener may read data before commit is fully visible"><caret>handlePartnerRelChangedEvent</warning>(Object event) { }
+                }
+                """);
+        this.myFixture.checkHighlighting(false, false, true, true);
+    }
+
+    public void testDoesNotReportSelfInvocationWithMatchingTransactionSemantics() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.SelfInvocation());
+        this.myFixture.configureByText("Sample.java", """
+                class Sample {
+                    @org.springframework.transaction.annotation.Transactional
+                    void outer() { inner(); }
+                    @org.springframework.transaction.annotation.Transactional
+                    void inner() { }
+                }
+                """);
+        this.myFixture.checkHighlighting(false, false, true, true);
+    }
+
+    public void testDoesNotReportSelfInvocationFromWriteToReadOnlyMethod() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.SelfInvocation());
+        this.myFixture.configureByText("Sample.java", """
+                class Sample {
+                    @org.springframework.transaction.annotation.Transactional
+                    void outer() { inner(); }
+                    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+                    void inner() { }
+                }
+                """);
+        this.myFixture.checkHighlighting(false, false, true, true);
+    }
+
+    public void testReportsSelfInvocationFromReadOnlyToWriteMethod() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.SelfInvocation());
+        this.myFixture.configureByText("Sample.java", """
+                class Sample {
+                    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+                    void <warning descr="Self-invocation of @Transactional method bypasses the Spring proxy">outer</warning>() { inner(); }
+                    @org.springframework.transaction.annotation.Transactional
+                    void inner() { }
+                }
+                """);
+        this.myFixture.checkHighlighting(false, false, true, true);
+    }
+
+    public void testReportsSelfInvocationWhenCalleeChangesIsolation() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.SelfInvocation());
+        this.myFixture.configureByText("Sample.java", """
+                class Sample {
+                    @org.springframework.transaction.annotation.Transactional
+                    void <warning descr="Self-invocation of @Transactional method bypasses the Spring proxy">outer</warning>() { inner(); }
+                    @org.springframework.transaction.annotation.Transactional(isolation = org.springframework.transaction.annotation.Isolation.SERIALIZABLE)
+                    void inner() { }
                 }
                 """);
         this.myFixture.checkHighlighting(false, false, true, true);

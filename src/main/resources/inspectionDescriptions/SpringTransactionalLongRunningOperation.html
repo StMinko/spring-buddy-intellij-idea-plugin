@@ -4,5 +4,8 @@
 <p>Reports transactional methods that appear to perform slow external work such as network/client calls or Thread.sleep.
     Holding a database transaction while waiting on external I/O can exhaust the connection pool. Use a transaction
     sandwich: load, call external service outside a transaction, then save.</p>
+<p>Calls are identified by client-like receiver types, such as <code>*Client</code>, <code>RestTemplate</code>,
+    <code>RestOperations</code>, or <code>WebClient</code>. Generic method names such as <code>get</code> and
+    <code>execute</code> do not count on their own.</p>
 </body>
 </html>

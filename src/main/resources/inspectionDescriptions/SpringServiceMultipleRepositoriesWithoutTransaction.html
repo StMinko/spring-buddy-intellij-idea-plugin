@@ -4,5 +4,6 @@
 <p>This inspection reports service methods that call multiple repositories without an explicit @Transactional boundary.
     If one write succeeds and a later operation fails, data can be partially committed. Add @Transactional to the
     service method or refactor the operations into a transactional service boundary.</p>
+<p>Repository writes inside callbacks passed to Spring's TransactionTemplate or TransactionOperations, and private helpers whose callers are transactionally covered or absent, are not reported.</p>
 </body>
 </html>

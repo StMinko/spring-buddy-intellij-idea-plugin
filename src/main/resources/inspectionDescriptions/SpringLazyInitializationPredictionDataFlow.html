@@ -11,5 +11,6 @@ obtained from a repository or service call that loaded it inside a transaction.
     Use <code>@Transactional</code> on the caller, initialize the association
     eagerly (<code>EntityGraph</code> or <code>JOIN FETCH</code>), or return a DTO.
 </p>
+<p>Direct lazy getter calls used only to read an entity's identifier are exempt. Private helpers are exempt when they have an in-class caller and every caller path reaches a transactional method. For directly loaded variables, associations named in the source repository method's <code>JOIN FETCH</code> query or <code>@EntityGraph(attributePaths = ...)</code> are treated as initialized; aliases are not followed for this fetch check.</p>
 </body>
 </html>

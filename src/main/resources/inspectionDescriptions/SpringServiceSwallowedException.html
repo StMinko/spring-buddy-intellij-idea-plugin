@@ -5,5 +5,6 @@
     Swallowing errors hides failures from callers and can leave the system in an inconsistent state. Rethrow the
     exception, convert it to a meaningful domain exception, or move error handling to a boundary where the failure can
     be handled explicitly.</p>
+<p>A broad catch that calls a logger's info, warn, warning, error, severe, fatal, or log method is not reported.</p>
 </body>
 </html>

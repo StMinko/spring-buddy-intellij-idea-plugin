@@ -20,6 +20,7 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
 
+import com.intellij.codeInsight.ExceptionUtil;
 import com.intellij.lang.java.JavaLanguage;
 import com.intellij.codeInspection.AbstractBaseJavaLocalInspectionTool;
 import com.intellij.codeInspection.LocalQuickFix;
@@ -218,7 +219,8 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
                             "@Transactional(readOnly = true) method appears to perform write operations",
                             ProblemHighlightType.ERROR, new DisableReadOnlyFix(), new RemoveMethodTransactionalAnnotationFix());
                 }
-                if (SpringTransactionalPrivateMethodInspection.this.thisKind(Kind.SELF_INVOCATION) && hasTransactionalSelfInvocation(method)) {
+                if (SpringTransactionalPrivateMethodInspection.this.thisKind(Kind.SELF_INVOCATION)
+                        && hasTransactionalSelfInvocation(method, transactional)) {
                     holder.registerProblem((nameIdentifier != null) ? nameIdentifier : method,
                             "Self-invocation of @Transactional method bypasses the Spring proxy",
                             ProblemHighlightType.ERROR);
@@ -256,7 +258,8 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
                             ProblemHighlightType.ERROR, new RemoveMethodTransactionalAnnotationFix());
                 }
                 if (SpringTransactionalPrivateMethodInspection.this.thisKind(Kind.WEAK_ISOLATION)
-                        && hasMultipleReads(method) && !hasExplicitStrongIsolation(transactional)) {
+                        && hasMultipleReads(method) && !hasExplicitStrongIsolation(transactional)
+                        && !isEffectiveReadOnly(method) && !takesPessimisticLock(method)) {
                     holder.registerProblem((nameIdentifier != null) ? nameIdentifier : method,
                             "Multiple reads with default/weak isolation can allow non-repeatable reads",
                             ProblemHighlightType.ERROR, new AddRepeatableReadIsolationFix(), new AddSerializableIsolationFix());
@@ -337,11 +340,29 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
     }
 
     private static boolean shouldReportMultipleWritesWithoutTransaction(PsiMethod method) {
-        if (countWriteOperations(method) < 2 || isTestMethod(method) || isWithinTransactionalClass(method)
-                || isPrivateOnlyCalledFromTransactionalMethods(method)) {
+        if (countWriteOperationsOutsideTransactionTemplate(method) < 2 || isTestMethod(method)
+                || isWithinTransactionalClass(method) || isPrivateWithTransactionalCallerCoverage(method)) {
             return false;
         }
         return true;
+    }
+
+    private static boolean isPrivateWithTransactionalCallerCoverage(PsiMethod method) {
+        if (!method.hasModifierProperty(PsiModifier.PRIVATE)) {
+            return false;
+        }
+        PsiClass containingClass = method.getContainingClass();
+        if (containingClass == null) {
+            return false;
+        }
+        boolean hasInClassCaller = false;
+        for (PsiMethod candidate : containingClass.getMethods()) {
+            if (candidate != method && candidate.getBody() != null && callsMethod(candidate, method)) {
+                hasInClassCaller = true;
+                break;
+            }
+        }
+        return hasInClassCaller && SpringRemainingPitfallInspection.hasTransactionalCallerCoverage(method);
     }
 
     private static boolean isWithinTransactionalClass(PsiMethod method) {
@@ -380,30 +401,6 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
             }
         }
         return hasCall;
-    }
-
-    private static boolean isPrivateOnlyCalledFromTransactionalMethods(PsiMethod method) {
-        if (!method.hasModifierProperty(PsiModifier.PRIVATE)) {
-            return false;
-        }
-        PsiClass containingClass = method.getContainingClass();
-        if (containingClass == null) {
-            return false;
-        }
-        boolean[] hasCall = {false};
-        boolean[] hasNonTransactionalCall = {false};
-        for (PsiMethod candidate : containingClass.getMethods()) {
-            if (candidate == method || candidate.getBody() == null) {
-                continue;
-            }
-            if (callsMethod(candidate, method)) {
-                hasCall[0] = true;
-                if (findTransactionalAnnotation(candidate) == null) {
-                    hasNonTransactionalCall[0] = true;
-                }
-            }
-        }
-        return hasCall[0] && !hasNonTransactionalCall[0];
     }
 
     private static boolean callsMethod(PsiMethod caller, PsiMethod target) {
@@ -520,10 +517,26 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
     }
 
     private static boolean throwsCheckedExceptionWithoutRollback(PsiMethod method, PsiAnnotation annotation) {
+        if (isEffectiveReadOnly(method) && countWriteOperations(method) == 0) {
+            return false;
+        }
         Set<String> rollbackTypes = annotationTypes(annotation, "rollbackFor", "rollbackOn");
         Set<String> noRollbackTypes = annotationTypes(annotation, "noRollbackFor", "noRollbackOn");
+        PsiCodeBlock body = method.getBody();
         for (PsiClassType thrownType : method.getThrowsList().getReferencedTypes()) {
             String type = thrownType.getCanonicalText();
+            if (body != null) {
+                boolean thrownByBody = false;
+                for (PsiClassType bodyThrownType : ExceptionUtil.getThrownCheckedExceptions(body)) {
+                    if (thrownType.isAssignableFrom(bodyThrownType)) {
+                        thrownByBody = true;
+                        break;
+                    }
+                }
+                if (!thrownByBody) {
+                    continue;
+                }
+            }
             if (isCheckedException(type) && !covers(rollbackTypes, type) && !covers(noRollbackTypes, type)) {
                 return true;
             }
@@ -615,6 +628,52 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
         return count[0] >= 2;
     }
 
+    private static boolean takesPessimisticLock(PsiMethod method) {
+        return takesPessimisticLock(method, new HashSet<>());
+    }
+
+    private static boolean takesPessimisticLock(PsiMethod method, Set<PsiMethod> visited) {
+        if (!visited.add(method)) {
+            return false;
+        }
+        PsiCodeBlock body = method.getBody();
+        PsiClass containingClass = method.getContainingClass();
+        if (body == null || containingClass == null) {
+            return false;
+        }
+        boolean[] found = {false};
+        body.accept(new JavaRecursiveElementVisitor() {
+            @Override
+            public void visitMethodCallExpression(@NotNull PsiMethodCallExpression expression) {
+                super.visitMethodCallExpression(expression);
+                PsiMethod called = expression.resolveMethod();
+                if (hasPessimisticLock(called)
+                        || (called != null && called.getContainingClass() == containingClass
+                        && takesPessimisticLock(called, visited))) {
+                    found[0] = true;
+                }
+            }
+        });
+        return found[0];
+    }
+
+    private static boolean hasPessimisticLock(PsiMethod method) {
+        if (method == null) {
+            return false;
+        }
+        PsiModifierList modifiers = method.getModifierList();
+        if (SpringInspectionUtil.hasAnnotation(modifiers, "org.springframework.data.jpa.repository.Lock", "Lock")) {
+            return true;
+        }
+        PsiAnnotation query = SpringInspectionUtil.findAnnotation(modifiers,
+                "org.springframework.data.jpa.repository.Query", "Query");
+        if (query == null) {
+            return false;
+        }
+        String queryText = query.getText().toLowerCase(Locale.ROOT);
+        return queryText.contains("for update") || queryText.contains("for no key update");
+    }
+
     private static boolean isReadOperation(PsiMethodCallExpression expression) {
         String name = referenceName(expression.getMethodExpression());
         if (name == null) {
@@ -666,6 +725,25 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
             public void visitMethodCallExpression(@NotNull PsiMethodCallExpression expression) {
                 super.visitMethodCallExpression(expression);
                 if (isWriteOperation(expression)) {
+                    count[0]++;
+                }
+            }
+        });
+        return count[0];
+    }
+
+    private static int countWriteOperationsOutsideTransactionTemplate(PsiMethod method) {
+        PsiCodeBlock body = method.getBody();
+        if (body == null) {
+            return 0;
+        }
+        int[] count = {0};
+        body.accept(new JavaRecursiveElementVisitor() {
+            @Override
+            public void visitMethodCallExpression(@NotNull PsiMethodCallExpression expression) {
+                super.visitMethodCallExpression(expression);
+                if (!SpringRemainingPitfallInspection.isInsideTransactionTemplateCallback(expression)
+                        && isWriteOperation(expression)) {
                     count[0]++;
                 }
             }
@@ -740,7 +818,7 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
         return found[0];
     }
 
-    private static boolean hasTransactionalSelfInvocation(PsiMethod method) {
+    private static boolean hasTransactionalSelfInvocation(PsiMethod method, PsiAnnotation callerTransactional) {
         PsiCodeBlock body = method.getBody();
         PsiClass containingClass = method.getContainingClass();
         if (body == null || containingClass == null) {
@@ -753,15 +831,27 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
                 super.visitMethodCallExpression(expression);
                 PsiMethod target = expression.resolveMethod();
                 PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
+                PsiAnnotation targetTransactional = target != null ? findTransactionalAnnotation(target) : null;
                 if (target != null && target.getContainingClass() == containingClass
                         && (qualifier == null || qualifier instanceof PsiThisExpression)
-                        && findTransactionalAnnotation(target) != null) {
+                        && targetTransactional != null
+                        && changesTransactionSemantics(callerTransactional, targetTransactional)) {
                     found[0] = true;
                 }
             }
         });
         return found[0];
     }
+
+    private static boolean changesTransactionSemantics(PsiAnnotation caller, PsiAnnotation callee) {
+        for (PsiNameValuePair attribute : callee.getParameterList().getAttributes()) {
+            if (!"readOnly".equals(attribute.getName())) {
+                return true;
+            }
+        }
+        return isReadOnly(caller) && !isReadOnly(callee);
+    }
+
 
     private static boolean hasIgnoredRequiresNewSelfInvocation(PsiMethod method) {
         PsiCodeBlock body = method.getBody();
@@ -952,16 +1042,27 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
 
     private static boolean isLongRunningOperation(PsiMethodCallExpression expression) {
         String methodName = referenceName(expression.getMethodExpression());
+        if ("sleep".equals(methodName)) {
+            return true;
+        }
         PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
-        String qualifierText = (qualifier != null) ? qualifier.getText() : "";
-        String lowerQualifier = qualifierText.toLowerCase(Locale.ROOT);
-        return "sleep".equals(methodName) || "exchange".equals(methodName) || "execute".equals(methodName)
-                || "retrieve".equals(methodName) || "get".equals(methodName) || "post".equals(methodName)
-                || "getForObject".equals(methodName) || "getForEntity".equals(methodName)
-                || "postForObject".equals(methodName) || "postForEntity".equals(methodName)
-                || qualifierText.contains("RestTemplate") || qualifierText.contains("WebClient")
-                || lowerQualifier.contains("resttemplate") || lowerQualifier.contains("webclient")
-                || lowerQualifier.contains("client");
+        if (qualifier == null) {
+            return false;
+        }
+        PsiType qualifierType = qualifier.getType();
+        if (qualifierType instanceof PsiClassType classType) {
+            String className = classType.getClassName();
+            if (className != null) {
+                String lowerClassName = className.toLowerCase(Locale.ROOT);
+                return className.endsWith("Client") || lowerClassName.contains("resttemplate")
+                        || lowerClassName.contains("restoperations") || lowerClassName.contains("webclient");
+            }
+        } else if (qualifierType != null) {
+            return false;
+        }
+        String lowerQualifier = qualifier.getText().toLowerCase(Locale.ROOT);
+        return lowerQualifier.contains("client") || lowerQualifier.contains("resttemplate")
+                || lowerQualifier.contains("restoperations") || lowerQualifier.contains("webclient");
     }
 
     private static boolean hasTimeout(PsiAnnotation annotation) {

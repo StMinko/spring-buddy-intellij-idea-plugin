@@ -4,5 +4,8 @@
 <p>Reports @Transactional methods that declare checked exceptions without rollbackFor or rollbackOn. By default Spring
     rolls back on unchecked exceptions only. Add rollbackFor/rollbackOn or convert the failure to an unchecked exception
     if rollback is required.</p>
+<p>For methods with a body, the inspection reports only checked exceptions that can escape the body. Effective
+    read-only transactions without detected write operations are exempt. Exceptions from calls that cannot be resolved
+    do not contribute to the analysis; methods without a body retain declaration-based reporting.</p>
 </body>
 </html>

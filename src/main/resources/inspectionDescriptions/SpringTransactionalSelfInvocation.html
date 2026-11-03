@@ -4,5 +4,6 @@
 <p>Reports same-bean calls to @Transactional methods. Spring proxy advice is applied when callers go through the proxy,
     not when one method invokes another on this. Move the call to another bean or invoke through a proxy-aware
     boundary.</p>
+<p>Calls are not reported when the callee does not change transaction semantics, including a <code>readOnly</code>-only override on a write transaction. Calls from a read-only caller to a writable callee remain reported.</p>
 </body>
 </html>

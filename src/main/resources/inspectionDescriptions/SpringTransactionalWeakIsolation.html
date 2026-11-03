@@ -4,5 +4,8 @@
 <p>Reports transactional methods that perform multiple reads while using default or weak isolation. Critical workflows
     can observe non-repeatable reads. Consider optimistic locking with @Version or stronger isolation such as
     REPEATABLE_READ or SERIALIZABLE.</p>
+<p>Read-only transactions are excluded, as are methods that acquire a pessimistic lock through a repository method
+    annotated with <code>@Lock</code> or a <code>@Query</code> containing <code>FOR UPDATE</code> or
+    <code>FOR NO KEY UPDATE</code>, including same-class helpers.</p>
 </body>
 </html>

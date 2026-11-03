@@ -11,6 +11,11 @@ transactional class.
     if transaction phase semantics are not needed.
 </p>
 <p>
+    This inspection reports only when the listener or a same-class method it calls performs a detected repository write
+    outside a <code>TransactionTemplate</code> or <code>TransactionOperations</code> callback. A listener that only
+    delegates to another bean is not reported.
+</p>
+<p>
     Use <code>@Transactional(propagation = Propagation.REQUIRES_NEW)</code> only when the listener work must commit
     independently from any surrounding transaction, for example audit/outbox-style writes. This changes semantics and
     can increase connection usage.

@@ -17,6 +17,7 @@
 package com.sarhan.springformat.inspection;
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import org.assertj.core.api.Assertions;
 
 /**
  * @author Akmal Sarhan
@@ -62,5 +63,128 @@ public class SpringJpaModifyingWithoutClearAutomaticallyInspectionTest extends B
                 }
                 """);
         this.myFixture.checkHighlighting(false, false, true, true);
+    }
+
+    public void testReportsWhenEntityIsReadBeforeAndAfterBulkUpdate() {
+        this.myFixture.enableInspections(new SpringJpaModifyingWithoutClearAutomaticallyInspection());
+        this.myFixture.configureByText("Sample.java", """
+                import java.util.Optional;
+                @interface Modifying { boolean clearAutomatically() default false; }
+                @interface Query { String value(); }
+                class Device { }
+                interface Repository {
+                    @Modifying
+                    @Query("update Device d set d.active = false")
+                    int updateDevices();
+                    Optional<Device> findDevice();
+                }
+                class Service {
+                    Repository repository;
+                    void updateThenRead() {
+                        Device before = this.repository.findDevice().orElseThrow();
+                        this.repository.updateDevices();
+                        this.repository.findDevice().orElseThrow();
+                    }
+                }
+                """);
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .as("bulk updates followed by a read of a previously loaded entity are reported")
+                .anyMatch(highlight -> "@Modifying without clearAutomatically=true may leave stale entities in the persistence context"
+                        .equals(highlight.getDescription()));
+    }
+
+    public void testReportsWhenLoadedEntityIsMutatedAfterBulkUpdate() {
+        this.myFixture.enableInspections(new SpringJpaModifyingWithoutClearAutomaticallyInspection());
+        this.myFixture.configureByText("Sample.java", """
+                @interface Modifying { boolean clearAutomatically() default false; }
+                @interface Query { String value(); }
+                class Device {
+                    void setFcmToken(String token) { }
+                }
+                interface JpaRepository<E, ID> { }
+                interface Repository extends JpaRepository<Device, Long> {
+                    @Modifying
+                    @Query("update Device d set d.fcmToken = null where d.id <> :id")
+                    int clearFcmTokenOfOthers();
+                    Device loadDevice();
+                }
+                class Service {
+                    Repository repository;
+                    void update() {
+                        Device device = this.repository.loadDevice();
+                        this.repository.clearFcmTokenOfOthers();
+                        device.setFcmToken("new-token");
+                    }
+                }
+                """);
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .as("a loaded entity that is mutated after the bulk update remains reported")
+                .anyMatch(highlight -> "@Modifying without clearAutomatically=true may leave stale entities in the persistence context"
+                        .equals(highlight.getDescription()));
+    }
+
+    public void testDoesNotReportWhenEntityIsLoadedOnlyAfterBulkUpdate() {
+        this.myFixture.enableInspections(new SpringJpaModifyingWithoutClearAutomaticallyInspection());
+        this.myFixture.configureByText("Sample.java", """
+                import java.util.Optional;
+                @interface Modifying { boolean clearAutomatically() default false; }
+                @interface Query { String value(); }
+                class Device { }
+                interface Repository {
+                    @Modifying
+                    @Query("update Device d set d.active = false")
+                    int updateDevices();
+                    Optional<Device> findDevice();
+                }
+                class Service {
+                    Repository repository;
+                    void updateThenLoadFresh() {
+                        this.repository.updateDevices();
+                        Device fresh = this.repository.findDevice().orElseThrow();
+                    }
+                }
+                """);
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .as("a fresh entity load after the bulk update is not reported")
+                .noneMatch(highlight -> "@Modifying without clearAutomatically=true may leave stale entities in the persistence context"
+                        .equals(highlight.getDescription()));
+    }
+
+    public void testDoesNotReportWhenEntityIsLoadedOutsideTransactionTemplateCallback() {
+        this.myFixture.enableInspections(new SpringJpaModifyingWithoutClearAutomaticallyInspection());
+        this.myFixture.addFileToProject("org/springframework/data/jpa/repository/Modifying.java", """
+                package org.springframework.data.jpa.repository;
+                public @interface Modifying { boolean clearAutomatically() default false; }
+                """);
+        this.myFixture.configureByText("Sample.java", """
+                package org.springframework.transaction.support;
+                import java.util.Optional;
+                import org.springframework.data.jpa.repository.Modifying;
+                class Device { }
+                interface JpaRepository<E, ID> { }
+                interface Repository extends JpaRepository<Device, Long> {
+                    @Modifying
+                    int updateDevices();
+                    Optional<Device> findDevice();
+                }
+                class Service {
+                    Repository repository;
+                    TransactionTemplate transactionTemplate;
+                    void updateInCallback() {
+                        Device before = this.repository.findDevice().orElseThrow();
+                        this.transactionTemplate.execute(status -> {
+                            this.repository.updateDevices();
+                            return null;
+                        });
+                    }
+                }
+                class TransactionTemplate {
+                    <T> T execute(java.util.function.Function<Object, T> callback) { return null; }
+                }
+                """);
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .as("an entity read outside the transaction-template callback does not make its update stale")
+                .noneMatch(highlight -> "@Modifying without clearAutomatically=true may leave stale entities in the persistence context"
+                        .equals(highlight.getDescription()));
     }
 }

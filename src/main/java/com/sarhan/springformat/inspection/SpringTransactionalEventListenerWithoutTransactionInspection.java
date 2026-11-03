@@ -16,6 +16,9 @@
 
 package com.sarhan.springformat.inspection;
 
+import java.util.HashSet;
+import java.util.Set;
+
 import com.intellij.codeInspection.AbstractBaseJavaLocalInspectionTool;
 import com.intellij.codeInspection.LocalQuickFix;
 import com.intellij.codeInspection.ProblemDescriptor;
@@ -23,11 +26,17 @@ import com.intellij.codeInspection.ProblemHighlightType;
 import com.intellij.codeInspection.ProblemsHolder;
 import com.intellij.openapi.project.Project;
 import com.intellij.psi.JavaElementVisitor;
+import com.intellij.psi.JavaRecursiveElementVisitor;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiCodeBlock;
+import com.intellij.psi.PsiExpression;
 import com.intellij.psi.PsiElementVisitor;
 import com.intellij.psi.PsiMethod;
+import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiModifierList;
+import com.intellij.psi.PsiType;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -55,6 +64,9 @@ public class SpringTransactionalEventListenerWithoutTransactionInspection extend
                         && findAnnotation(method.getContainingClass().getModifierList(), "Transactional") != null)) {
                     return;
                 }
+                if (!hasRepositoryWrite(method, method.getContainingClass(), new HashSet<>())) {
+                    return;
+                }
                 holder.registerProblem(listener,
                         "@TransactionalEventListener should declare a transaction boundary or be in a transactional class",
                         ProblemHighlightType.ERROR,
@@ -63,6 +75,41 @@ public class SpringTransactionalEventListenerWithoutTransactionInspection extend
                         new ConvertToEventListenerFix());
             }
         };
+    }
+
+    private static boolean hasRepositoryWrite(PsiMethod method, PsiClass listenerClass, Set<PsiMethod> visited) {
+        if (listenerClass == null || !visited.add(method)) {
+            return false;
+        }
+        PsiCodeBlock body = method.getBody();
+        if (body == null) {
+            return false;
+        }
+        boolean[] found = {false};
+        body.accept(new JavaRecursiveElementVisitor() {
+            @Override
+            public void visitMethodCallExpression(@NotNull PsiMethodCallExpression expression) {
+                if (found[0] || SpringRemainingPitfallInspection.isInsideTransactionTemplateCallback(expression)) {
+                    return;
+                }
+                super.visitMethodCallExpression(expression);
+                PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
+                PsiType qualifierType = qualifier != null ? qualifier.getType() : null;
+                PsiClass qualifierClass = qualifierType != null ? SpringInspectionUtil.resolvedClass(qualifierType) : null;
+                String methodName = expression.getMethodExpression().getReferenceName();
+                if (qualifierClass != null && SpringInspectionUtil.isSpringDataRepository(qualifierClass)
+                        && methodName != null && SpringRemainingPitfallInspection.isWriteOperation(methodName)) {
+                    found[0] = true;
+                    return;
+                }
+                PsiMethod target = expression.resolveMethod();
+                if (target != null && target.getContainingClass() == listenerClass
+                        && hasRepositoryWrite(target, listenerClass, visited)) {
+                    found[0] = true;
+                }
+            }
+        });
+        return found[0];
     }
 
     private static PsiAnnotation findAnnotation(PsiModifierList modifiers, String shortName) {

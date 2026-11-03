@@ -22,6 +22,7 @@ import com.intellij.codeInsight.daemon.impl.HighlightInfo;
 import com.intellij.lang.annotation.HighlightSeverity;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.sarhan.dataFlow.SpringLazyInitializationPredictionDataFlowInspection;
+import org.assertj.core.api.Assertions;
 
 /**
  * @author Akmal Sarhan
@@ -343,5 +344,169 @@ public class SpringLazyInitializationPredictionDataFlowInspectionTest extends Ba
                 .filter((HighlightInfo h) -> h.getDescription() != null && h.getDescription().contains("LazyInitializationException"))
                 .count();
         assertEquals(1, (int) count);
+    }
+
+    public void testDoesNotReportLazyGetterFollowedByGetId() {
+        this.configureLazyInitializationFixture("""
+                void process(Long id) {
+                    Order order = repo.findById(id);
+                    order.getCustomer().getId();
+                }
+                """);
+
+        Assertions.assertThat(this.lazyInitializationProblemCount())
+                .as("reading the identifier does not initialize the lazy association")
+                .isZero();
+    }
+
+    public void testReportsLazyGetterFollowedByEntityPropertyRead() {
+        this.configureLazyInitializationFixture("""
+                void process(Long id) {
+                    Order order = repo.findById(id);
+                    order.getCustomer().getName();
+                }
+                """);
+
+        Assertions.assertThat(this.lazyInitializationProblemCount())
+                .as("reading a property of the lazy association remains reported")
+                .isEqualTo(1);
+    }
+
+    public void testDoesNotReportPrivateHelperCalledFromTransactionalMethod() {
+        this.configureLazyInitializationFixture("""
+                @Transactional
+                void process(Long id) {
+                    readOrder(id);
+                }
+
+                private void readOrder(Long id) {
+                    Order order = repo.findById(id);
+                    order.getItems().size();
+                }
+                """);
+
+        Assertions.assertThat(this.lazyInitializationProblemCount())
+                .as("a private helper reached only from a transactional method is covered")
+                .isZero();
+    }
+
+    public void testReportsPrivateHelperCalledFromNonTransactionalMethod() {
+        this.configureLazyInitializationFixture("""
+                void process(Long id) {
+                    readOrder(id);
+                }
+
+                private void readOrder(Long id) {
+                    Order order = repo.findById(id);
+                    order.getItems().size();
+                }
+                """);
+
+        Assertions.assertThat(this.lazyInitializationProblemCount())
+                .as("a private helper reached from a non-transactional method remains reported")
+                .isEqualTo(1);
+    }
+
+    public void testDoesNotReportAssociationFetchedByQuery() {
+        this.configureLazyInitializationFixture("""
+                void process(Long id) {
+                    Order order = repo.findWithCustomerById(id);
+                    order.getCustomer().getName();
+                }
+                """);
+
+        Assertions.assertThat(this.lazyInitializationProblemCount())
+                .as("an association fetched by the source query is already initialized")
+                .isZero();
+    }
+
+    public void testDoesNotReportAssociationFetchedByEntityGraph() {
+        this.configureLazyInitializationFixture("""
+                void process(Long id) {
+                    Order order = repo.findWithCustomerGraphById(id);
+                    order.getCustomer().getName();
+                }
+                """);
+
+        Assertions.assertThat(this.lazyInitializationProblemCount())
+                .as("an association included in the source entity graph is already initialized")
+                .isZero();
+    }
+
+    public void testReportsFetchAfterSourceVariableIsAliased() {
+        this.configureLazyInitializationFixture("""
+                void process(Long id) {
+                    Order order = repo.findWithCustomerById(id);
+                    Order alias = order;
+                    order = alias;
+                    order.getCustomer().getName();
+                }
+                """);
+
+        Assertions.assertThat(this.lazyInitializationProblemCount())
+                .as("fetch metadata is not propagated through aliases")
+                .isEqualTo(1);
+    }
+
+    private void configureLazyInitializationFixture(String methods) {
+        this.myFixture.enableInspections(new SpringLazyInitializationPredictionDataFlowInspection());
+        this.myFixture.configureByText("Order.java", """
+                @interface Entity { }
+                @interface OneToMany { }
+                @interface ManyToOne { FetchType fetch() default FetchType.EAGER; }
+                enum FetchType { EAGER, LAZY }
+
+                @Entity
+                class Customer {
+                    Long getId() { return 1L; }
+                    String getName() { return "name"; }
+                }
+
+                @Entity
+                class Order {
+                    @ManyToOne(fetch = FetchType.LAZY)
+                    Customer customer;
+
+                    Customer getCustomer() { return customer; }
+
+                    @OneToMany
+                    java.util.List<Item> getItems() { return null; }
+                }
+
+                class Item { }
+                """);
+        this.myFixture.configureByText("OrderRepository.java", """
+                @interface Repository { }
+                @interface Query { String value(); }
+                @interface EntityGraph { String[] attributePaths() default {}; }
+
+                @Repository
+                interface OrderRepository {
+                    Order findById(Long id);
+
+                    @Query("select o from Order o join fetch o.customer")
+                    Order findWithCustomerById(Long id);
+
+                    @EntityGraph(attributePaths = "customer")
+                    Order findWithCustomerGraphById(Long id);
+                }
+                """);
+        this.myFixture.configureByText("Sample.java", """
+                @interface Transactional { }
+
+                class Sample {
+                    OrderRepository repo;
+
+                %s
+                }
+                """.formatted(methods));
+    }
+
+    private long lazyInitializationProblemCount() {
+        List<HighlightInfo> highlights = this.myFixture.doHighlighting();
+        return highlights.stream()
+                .filter((HighlightInfo h) -> h.getSeverity() == HighlightSeverity.ERROR)
+                .filter((HighlightInfo h) -> h.getDescription() != null && h.getDescription().contains("LazyInitializationException"))
+                .count();
     }
 }
