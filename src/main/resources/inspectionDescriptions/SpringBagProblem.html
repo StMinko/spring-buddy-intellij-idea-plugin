@@ -6,5 +6,8 @@
     is treated as a "Bag", causing Hibernate to delete every row in the join table and
     re-insert all of them on every collection change. Use <code>java.util.Set</code> instead
     — Hibernate can then issue a single INSERT or DELETE statement for incremental updates.</p>
+<p>Not reported: inverse-side collections (<code>mappedBy</code>), which Hibernate never
+    recreates because the owning side writes the rows, and lists with <code>@OrderColumn</code>,
+    which are indexed lists rather than bags.</p>
 </body>
 </html>

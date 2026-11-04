@@ -150,6 +150,60 @@ public class SpringJpaModifyingWithoutClearAutomaticallyInspectionTest extends B
                         .equals(highlight.getDescription()));
     }
 
+    public void testDoesNotReportWhenBulkUpdateExcludesTheLoadedEntity() {
+        this.configureExcludedEntityFixture("""
+                void update(Long id) {
+                    Device device = this.repository.loadDevice(id).orElseThrow();
+                    this.repository.clearFcmTokenOfOthers("token", device.getId());
+                    device.setFcmToken("token");
+                }
+                """);
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .as("an entity the bulk query excludes by id <> :param cannot go stale")
+                .noneMatch(highlight -> "@Modifying without clearAutomatically=true may leave stale entities in the persistence context"
+                        .equals(highlight.getDescription()));
+    }
+
+    public void testReportsWhenAnotherEntityIsLoadedBeforeExcludingBulkUpdate() {
+        this.configureExcludedEntityFixture("""
+                void update(Long id, Long otherId) {
+                    Device device = this.repository.loadDevice(id).orElseThrow();
+                    Device other = this.repository.loadDevice(otherId).orElseThrow();
+                    this.repository.clearFcmTokenOfOthers("token", device.getId());
+                    other.setFcmToken("token");
+                }
+                """);
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .as("an entity the bulk query does not exclude remains reported")
+                .anyMatch(highlight -> "@Modifying without clearAutomatically=true may leave stale entities in the persistence context"
+                        .equals(highlight.getDescription()));
+    }
+
+    private void configureExcludedEntityFixture(String serviceMethod) {
+        this.myFixture.enableInspections(new SpringJpaModifyingWithoutClearAutomaticallyInspection());
+        this.myFixture.configureByText("Sample.java", """
+                import java.util.Optional;
+                @interface Modifying { boolean clearAutomatically() default false; boolean flushAutomatically() default false; }
+                @interface Query { String value(); }
+                @interface Param { String value(); }
+                class Device {
+                    Long getId() { return 1L; }
+                    void setFcmToken(String token) { }
+                }
+                interface JpaRepository<E, ID> { }
+                interface Repository extends JpaRepository<Device, Long> {
+                    @Modifying(flushAutomatically = true)
+                    @Query("update Device d set d.fcmToken = null where d.fcmToken = :token and d.id <> :id")
+                    int clearFcmTokenOfOthers(@Param("token") String token, @Param("id") Long id);
+                    Optional<Device> loadDevice(Long id);
+                }
+                class Service {
+                    Repository repository;
+                %s
+                }
+                """.formatted(serviceMethod));
+    }
+
     public void testDoesNotReportWhenEntityIsLoadedOutsideTransactionTemplateCallback() {
         this.myFixture.enableInspections(new SpringJpaModifyingWithoutClearAutomaticallyInspection());
         this.myFixture.addFileToProject("org/springframework/data/jpa/repository/Modifying.java", """

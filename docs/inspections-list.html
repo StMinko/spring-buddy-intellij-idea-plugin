@@ -1192,7 +1192,7 @@ h2 .count {
 <article class="card" data-level="error">
 <div class="class-name">SpringJpaCascadeAllOnManyToOneInspection</div>
 <div class="display-name">cascade = ALL on @ManyToOne/@ManyToMany<span class="badge red">ERROR</span></div>
-<div class="description">SpringJpaCascadeAllOnManyToOne: flags <pre class="code"> cascade = CascadeType.ALL</pre> (or a list including ALL) on <pre class="code"> @ManyToOne</pre> or <pre class="code"> @ManyToMany</pre> associations. This is a JPA anti-pattern: the owning side of a many-to-one association should not cascade lifecycle operations to the parent.</div>
+<div class="description">SpringJpaCascadeAllOnManyToOne: flags <pre class="code"> cascade = CascadeType.ALL</pre> (or a list including ALL) on <pre class="code"> @ManyToOne</pre> or <pre class="code"> @ManyToMany</pre> associations. This is a JPA anti-pattern: the owning side of a many-to-one association should not cascade lifecycle operations to the parent. A <pre class="code"> @ManyToOne</pre> with <pre class="code"> @JoinColumn(unique = true)</pre> is skipped because the target is exclusively owned.</div>
 </article>
 <article class="card" data-level="warning">
 <div class="class-name">SpringJpaEntityLombokPitfallInspection</div>
@@ -1237,7 +1237,7 @@ h2 .count {
 <article class="card" data-level="error">
 <div class="class-name">SpringJpaLobMissingForClobColumnInspection</div>
 <div class="display-name">@Column large-object definition missing @Lob<span class="badge red">ERROR</span><span class="badge fix">FIX</span></div>
-<div class="description">Detects JPA fields with <pre class="code"> @Column(columnDefinition = "CLOB")</pre>, <pre class="code"> BLOB</pre>, or text-like large-object column definitions that do not also declare <pre class="code"> @Lob</pre>. The database column definition alone does not make JPA bind the property as a LOB; Hibernate can use the wrong JDBC type or fail at runtime. Quick-fix adds <pre class="code"> @Lob</pre>.</div>
+<div class="description">Detects JPA fields with <pre class="code"> @Column(columnDefinition = "CLOB")</pre>, <pre class="code"> BLOB</pre>, or MySQL <pre class="code"> TINYTEXT</pre>/<pre class="code"> MEDIUMTEXT</pre>/<pre class="code"> LONGTEXT</pre> column definitions that do not also declare <pre class="code"> @Lob</pre>. Plain <pre class="code"> TEXT</pre>, arrays and <pre class="code"> jsonb</pre> are ordinary columns and are not reported. The database column definition alone does not make JPA bind the property as a LOB; Hibernate can use the wrong JDBC type or fail at runtime. Quick-fix adds <pre class="code"> @Lob</pre>.</div>
 </article>
 <article class="card" data-level="warning">
 <div class="class-name">SpringJpaOneToManyWithoutMappedByInspection</div>

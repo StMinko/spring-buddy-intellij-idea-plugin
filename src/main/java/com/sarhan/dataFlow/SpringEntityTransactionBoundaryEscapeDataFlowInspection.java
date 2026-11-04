@@ -23,6 +23,8 @@ import com.intellij.codeInspection.AbstractBaseJavaLocalInspectionTool;
 import com.intellij.codeInspection.ProblemHighlightType;
 import com.intellij.codeInspection.ProblemsHolder;
 import com.intellij.psi.*;
+import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.psi.util.PsiUtil;
 import com.sarhan.dataFlow.base.LazyLoadingSinkDetector;
 import com.sarhan.springformat.inspection.SpringInspectionUtil;
 import org.jetbrains.annotations.NotNull;
@@ -280,9 +282,52 @@ public class SpringEntityTransactionBoundaryEscapeDataFlowInspection extends Abs
             }
 
             // Mutation
-            if (isLikelyMutation(name, call)) {
+            if (isLikelyMutation(name, call) && !isPersistedAfter(call, qualifier)) {
                 register(call, false);
             }
+        }
+
+        /** A later {@code repository.save(entity)} or {@code em.merge(entity)} writes the detached changes back. */
+        private static boolean isPersistedAfter(@NotNull PsiMethodCallExpression mutation, @NotNull PsiExpression qualifier) {
+            if (!(PsiUtil.skipParenthesizedExprDown(qualifier) instanceof PsiReferenceExpression reference)
+                    || !(reference.resolve() instanceof PsiVariable variable)) {
+                return false;
+            }
+            PsiMethod method = PsiTreeUtil.getParentOfType(mutation, PsiMethod.class);
+            PsiCodeBlock body = method != null ? method.getBody() : null;
+            if (body == null) {
+                return false;
+            }
+            int mutationEnd = mutation.getTextRange().getEndOffset();
+            for (PsiMethodCallExpression call : PsiTreeUtil.findChildrenOfType(body, PsiMethodCallExpression.class)) {
+                if (call.getTextRange().getStartOffset() >= mutationEnd && isPersistCallOf(call, variable)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean isPersistCallOf(@NotNull PsiMethodCallExpression call, @NotNull PsiVariable variable) {
+            String name = call.getMethodExpression().getReferenceName();
+            if (!"save".equals(name) && !"saveAndFlush".equals(name) && !"merge".equals(name)) {
+                return false;
+            }
+            PsiExpression[] arguments = call.getArgumentList().getExpressions();
+            if (arguments.length != 1
+                    || !(PsiUtil.skipParenthesizedExprDown(arguments[0]) instanceof PsiReferenceExpression argument)
+                    || argument.resolve() != variable) {
+                return false;
+            }
+            PsiExpression target = call.getMethodExpression().getQualifierExpression();
+            PsiType targetType = target != null ? target.getType() : null;
+            PsiClass targetClass = targetType != null ? SpringInspectionUtil.resolvedClass(targetType) : null;
+            if (targetClass == null) {
+                return false;
+            }
+            String qualifiedName = targetClass.getQualifiedName();
+            return SpringInspectionUtil.isSpringDataRepository(targetClass)
+                    || "jakarta.persistence.EntityManager".equals(qualifiedName)
+                    || "javax.persistence.EntityManager".equals(qualifiedName);
         }
 
         private void register(@NotNull PsiMethodCallExpression call, boolean isLazy) {

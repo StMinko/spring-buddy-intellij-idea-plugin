@@ -12,6 +12,8 @@ Reports Spring Data JPA <code>@Modifying</code> annotations that don't set
     enclosing method or the innermost <code>TransactionTemplate</code> or
     <code>TransactionOperations</code> callback. The entity type comes from the JPQL update/delete
     query or the repository's first generic type argument and is matched by simple class name.
+    An entity whose <code>getId()</code> is passed to a parameter the JPQL query excludes with
+    <code>alias.id &lt;&gt; :param</code> is not counted, because the bulk query cannot touch its row.
     Calls across methods are not followed; uncalled methods and cases without a determinable entity
     type remain reported.
 </p>

@@ -1,6 +1,7 @@
 <html>
 <body>
-Reports JPA fields that use <code>@Column(columnDefinition = "CLOB")</code>, <code>BLOB</code>, or text-like large-object column definitions without <code>@Lob</code>.
+Reports JPA fields that use <code>@Column(columnDefinition = "CLOB")</code>, <code>BLOB</code>, or MySQL large-object text types (<code>TINYTEXT</code>, <code>MEDIUMTEXT</code>, <code>LONGTEXT</code>) without <code>@Lob</code>.
+Plain <code>TEXT</code>, array types such as <code>text[]</code>, and <code>jsonb</code> are not reported: PostgreSQL treats <code>TEXT</code> as an ordinary string column, and adding <code>@Lob</code> there switches Hibernate to large-object storage.
 <p>
     A database large-object column declaration alone does not tell JPA to bind the field with LOB semantics.
     Hibernate can use the wrong JDBC type or schema metadata and fail at runtime or truncate large values.

@@ -155,6 +155,77 @@ public class SpringEntityTransactionBoundaryEscapeDataFlowInspectionTest extends
         assertEquals(1, (int) count);
     }
 
+    public void testNoReportWhenMutatedEntityIsSavedAfterwards() {
+        assertEquals(0, this.mutationThenPersistProblemCount("this.orders.save(order);"));
+    }
+
+    public void testReportsMutationWhenAnotherEntityIsSaved() {
+        assertEquals(1, this.mutationThenPersistProblemCount("this.orders.save(new Order());"));
+    }
+
+    public void testReportsMutationSavedBeforeTheChange() {
+        this.myFixture.enableInspections(new SpringEntityTransactionBoundaryEscapeDataFlowInspection());
+        this.configureMutationThenPersist("""
+                Order order = service.findOrder(id);
+                this.orders.save(order);
+                order.setStatus("SHIPPED");
+                """);
+        assertEquals(1, (int) this.boundaryEscapeProblemCount());
+    }
+
+    private long mutationThenPersistProblemCount(String persistStatement) {
+        this.myFixture.enableInspections(new SpringEntityTransactionBoundaryEscapeDataFlowInspection());
+        this.configureMutationThenPersist("""
+                Order order = service.findOrder(id);
+                order.setStatus("SHIPPED");
+                %s
+                """.formatted(persistStatement));
+        return this.boundaryEscapeProblemCount();
+    }
+
+    private void configureMutationThenPersist(String body) {
+        this.myFixture.configureByText("Order.java", """
+                @interface Entity { }
+                @Entity
+                class Order {
+                    void setStatus(String s) { }
+                }
+                """);
+        this.myFixture.configureByText("Sample.java", """
+                @interface Transactional { }
+                @interface Service { }
+                @interface Repository { }
+
+                @Repository
+                interface OrderRepository {
+                    Order save(Order order);
+                }
+
+                @Service
+                class OrderService {
+                    @Transactional
+                    Order findOrder(Long id) { return new Order(); }
+                }
+
+                @Service
+                class Sample {
+                    OrderService service;
+                    OrderRepository orders;
+
+                    void ship(Long id) {
+                %s
+                    }
+                }
+                """.formatted(body));
+    }
+
+    private long boundaryEscapeProblemCount() {
+        return this.myFixture.doHighlighting().stream()
+                .filter((HighlightInfo h) -> h.getSeverity() == HighlightSeverity.ERROR)
+                .filter((HighlightInfo h) -> h.getDescription() != null && h.getDescription().contains("Entity accessed outside @Transactional boundary"))
+                .count();
+    }
+
     public void testNoReportWhenCallerClassIsTransactional() {
         this.myFixture.enableInspections(new SpringEntityTransactionBoundaryEscapeDataFlowInspection());
         this.myFixture.configureByText("Order.java", """

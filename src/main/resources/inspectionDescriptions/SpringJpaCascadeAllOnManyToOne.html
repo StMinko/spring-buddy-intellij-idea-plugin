@@ -7,5 +7,10 @@ Reports <code>cascade = CascadeType.ALL</code> on <code>@ManyToOne</code> or
     parent — deleting a child can unintentionally delete shared parents. Restrict cascading to the
     operations actually needed, or move the cascade to the inverse <code>@OneToMany</code> side.
 </p>
+<p>
+    A <code>@ManyToOne</code> whose <code>@JoinColumn</code> declares <code>unique = true</code> is
+    not reported: the target row belongs to exactly one owner, so the association is a one-to-one in
+    disguise and cascading cannot reach a shared parent.
+</p>
 </body>
 </html>

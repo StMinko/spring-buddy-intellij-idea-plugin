@@ -17,6 +17,9 @@
 package com.sarhan.springformat.inspection;
 
 import java.util.Locale;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import com.intellij.codeInspection.AbstractBaseJavaLocalInspectionTool;
 import com.intellij.codeInspection.LocalQuickFix;
@@ -179,9 +182,17 @@ public abstract class SpringJpaEntityDesignInspection extends AbstractBaseJavaLo
         return false;
     }
 
+    // Plain TEXT is excluded: PostgreSQL and SQL Server map it to an ordinary string column, and
+    // @Lob there would switch Hibernate to large-object (OID) storage.
+    private static final Set<String> LARGE_OBJECT_TYPES = Set.of("clob", "nclob", "blob", "tinyblob", "mediumblob",
+            "longblob", "tinytext", "mediumtext", "longtext");
+
+    private static final Pattern COLUMN_TYPE = Pattern.compile("^\\s*([a-z]+)\\s*(\\[)?");
+
     private static boolean isLargeObjectColumnDefinition(String text) {
         String normalized = text.replace("\"", "").replace("'", "").toLowerCase(Locale.ROOT);
-        return normalized.contains("clob") || normalized.contains("blob") || normalized.contains("text");
+        Matcher type = COLUMN_TYPE.matcher(normalized);
+        return type.find() && type.group(2) == null && LARGE_OBJECT_TYPES.contains(type.group(1));
     }
 
     private static boolean hasAuditingField(PsiClass psiClass) {

@@ -17,6 +17,8 @@
 package com.sarhan.springformat.inspection;
 
 import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -49,6 +51,7 @@ import com.intellij.psi.PsiRecursiveElementVisitor;
 import com.intellij.psi.PsiReference;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiType;
+import com.intellij.psi.PsiVariable;
 import com.intellij.psi.search.searches.ReferencesSearch;
 import com.intellij.psi.util.PsiTreeUtil;
 import org.jetbrains.annotations.NotNull;
@@ -125,9 +128,10 @@ public class SpringJpaModifyingWithoutClearAutomaticallyInspection extends Abstr
             }
             PsiElement callback = findTransactionTemplateCallback(call);
             PsiElement scope = callback != null ? callback : body;
-            boolean loadedBefore = hasEntityParameter(caller, entityName)
-                    || hasEntityExpression(scope, call, entityName, true);
-            if (loadedBefore && hasEntityExpression(scope, call, entityName, false)) {
+            Set<PsiVariable> excluded = excludedEntityVariables(repositoryMethod, call);
+            boolean loadedBefore = hasEntityParameter(caller, entityName, excluded)
+                    || hasEntityExpression(scope, call, entityName, true, excluded);
+            if (loadedBefore && hasEntityExpression(scope, call, entityName, false, Set.of())) {
                 return true;
             }
         }
@@ -171,9 +175,73 @@ public class SpringJpaModifyingWithoutClearAutomaticallyInspection extends Abstr
         return separator >= 0 ? typeName.substring(separator + 1) : typeName;
     }
 
-    private static boolean hasEntityParameter(PsiMethod method, String entityName) {
+    /**
+     * Variables whose row the bulk query excludes: the call binds {@code variable.getId()} to a
+     * parameter the JPQL compares with {@code alias.id <> :param}, so that entity cannot go stale.
+     */
+    private static Set<PsiVariable> excludedEntityVariables(PsiMethod repositoryMethod, PsiMethodCallExpression call) {
+        PsiAnnotation query = SpringInspectionUtil.findAnnotation(repositoryMethod.getModifierList(),
+                "org.springframework.data.jpa.repository.Query", "Query");
+        PsiAnnotationMemberValue queryValue = query != null ? query.findDeclaredAttributeValue("value") : null;
+        if (!(queryValue instanceof PsiLiteralExpression literal) || !(literal.getValue() instanceof String queryText)) {
+            return Set.of();
+        }
+        PsiParameter[] parameters = repositoryMethod.getParameterList().getParameters();
+        PsiExpression[] arguments = call.getArgumentList().getExpressions();
+        Set<PsiVariable> excluded = new HashSet<>();
+        for (int i = 0; i < Math.min(parameters.length, arguments.length); i++) {
+            PsiVariable variable = idOwner(arguments[i]);
+            if (variable != null && excludesId(queryText, queryParameterName(parameters[i]))) {
+                excluded.add(variable);
+            }
+        }
+        return excluded;
+    }
+
+    private static PsiVariable idOwner(PsiExpression argument) {
+        if (argument instanceof PsiMethodCallExpression idCall
+                && "getId".equals(idCall.getMethodExpression().getReferenceName())
+                && idCall.getArgumentList().isEmpty()
+                && idCall.getMethodExpression().getQualifierExpression() instanceof PsiReferenceExpression qualifier
+                && qualifier.resolve() instanceof PsiVariable variable) {
+            return variable;
+        }
+        return null;
+    }
+
+    private static String queryParameterName(PsiParameter parameter) {
+        PsiAnnotation param = SpringInspectionUtil.findAnnotation(parameter.getModifierList(),
+                "org.springframework.data.repository.query.Param", "Param");
+        PsiAnnotationMemberValue value = param != null ? param.findDeclaredAttributeValue("value") : null;
+        if (value instanceof PsiLiteralExpression literal && literal.getValue() instanceof String name) {
+            return name;
+        }
+        return parameter.getName();
+    }
+
+    private static boolean excludesId(String queryText, String parameterName) {
+        String param = ":" + Pattern.quote(parameterName) + "\\b";
+        return Pattern.compile("\\b\\w+\\.id\\s*(<>|!=)\\s*" + param + "|" + param + "\\s*(<>|!=)\\s*\\w+\\.id\\b",
+                Pattern.CASE_INSENSITIVE).matcher(queryText).find();
+    }
+
+    /** The variable itself, or any part of its initializer ({@code repo.find(id).orElseThrow()}). */
+    private static boolean isExcludedEntityExpression(PsiExpression expression, Set<PsiVariable> excluded) {
+        if (expression instanceof PsiReferenceExpression reference && reference.resolve() instanceof PsiVariable variable
+                && excluded.contains(variable)) {
+            return true;
+        }
+        for (PsiVariable variable : excluded) {
+            if (PsiTreeUtil.isAncestor(variable.getInitializer(), expression, false)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasEntityParameter(PsiMethod method, String entityName, Set<PsiVariable> excluded) {
         for (PsiParameter parameter : method.getParameterList().getParameters()) {
-            if (hasEntityType(parameter.getType(), entityName)) {
+            if (!excluded.contains(parameter) && hasEntityType(parameter.getType(), entityName)) {
                 return true;
             }
         }
@@ -181,7 +249,7 @@ public class SpringJpaModifyingWithoutClearAutomaticallyInspection extends Abstr
     }
 
     private static boolean hasEntityExpression(PsiElement scope, PsiMethodCallExpression call,
-            String entityName, boolean beforeCall) {
+            String entityName, boolean beforeCall, Set<PsiVariable> excluded) {
         boolean[] found = {false};
         int callStart = call.getTextRange().getStartOffset();
         int callEnd = call.getTextRange().getEndOffset();
@@ -197,7 +265,8 @@ public class SpringJpaModifyingWithoutClearAutomaticallyInspection extends Abstr
                             : expression.getTextRange().getStartOffset() >= callEnd
                                     && (expression instanceof PsiReferenceExpression
                                     || expression instanceof PsiMethodCallExpression);
-                    if (inPosition && hasEntityType(expression.getType(), entityName)) {
+                    if (inPosition && hasEntityType(expression.getType(), entityName)
+                            && !isExcludedEntityExpression(expression, excluded)) {
                         found[0] = true;
                         return;
                     }

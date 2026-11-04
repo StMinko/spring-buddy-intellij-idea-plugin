@@ -87,6 +87,68 @@ public class SpringEventListenerSwallowsExceptionInspectionTest extends BasePlat
         this.myFixture.checkHighlighting(false, false, true, true);
     }
 
+    public void testDoesNotFlagAfterCommitTransactionalListener() {
+        this.myFixture.enableInspections(new SpringEventListenerSwallowsExceptionInspection());
+        this.myFixture.configureByText("Sample.java", """
+                enum TransactionPhase { BEFORE_COMMIT, AFTER_COMMIT, AFTER_ROLLBACK, AFTER_COMPLETION }
+                @interface TransactionalEventListener { TransactionPhase phase() default TransactionPhase.AFTER_COMMIT; }
+                class Logger { void error(String s, Throwable t) {} }
+                class Sample {
+                    Logger log = new Logger();
+                    @TransactionalEventListener
+                    void onDefault(Object event) {
+                        try {
+                            doWork();
+                        } catch (RuntimeException ex) {
+                            log.error("oops", ex);
+                        }
+                    }
+                    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+                    void onCommit(Object event) {
+                        try {
+                            doWork();
+                        } catch (RuntimeException ex) {
+                            log.error("oops", ex);
+                        }
+                    }
+                    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMPLETION)
+                    void onCompletion(Object event) {
+                        try {
+                            doWork();
+                        } catch (Exception ex) {
+                            log.error("oops", ex);
+                        }
+                    }
+                    void doWork() {}
+                }
+                """);
+        this.myFixture.doHighlighting().stream()
+                .filter(info -> info.getDescription() != null && info.getDescription().startsWith("@EventListener swallows"))
+                .forEach(info -> fail("Unexpected: " + info.getText() + " -> " + info.getDescription()));
+    }
+
+    public void testFlagsBeforeCommitTransactionalListener() {
+        this.myFixture.enableInspections(new SpringEventListenerSwallowsExceptionInspection());
+        this.myFixture.configureByText("Sample.java", """
+                enum TransactionPhase { BEFORE_COMMIT, AFTER_COMMIT, AFTER_ROLLBACK, AFTER_COMPLETION }
+                @interface TransactionalEventListener { TransactionPhase phase() default TransactionPhase.AFTER_COMMIT; }
+                class Logger { void error(String s, Throwable t) {} }
+                class Sample {
+                    Logger log = new Logger();
+                    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+                    void on(Object event) {
+                        try {
+                            doWork();
+                        } catch (<warning descr="@EventListener swallows RuntimeException; Spring will not see the failure — log and rethrow, or handle specifically">RuntimeException</warning> ex) {
+                            log.error("oops", ex);
+                        }
+                    }
+                    void doWork() {}
+                }
+                """);
+        this.myFixture.checkHighlighting(false, false, true, true);
+    }
+
     public void testDoesNotFlagNonEventListenerMethod() {
         this.myFixture.enableInspections(new SpringEventListenerSwallowsExceptionInspection());
         this.myFixture.configureByText("Sample.java", """

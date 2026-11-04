@@ -10,5 +10,10 @@ in the same class.
     setter call is silently lost (no dirty checking happens outside a session).
     Return a DTO or keep the access inside a <code>@Transactional</code> boundary.
 </p>
+<p>
+    A mutation is not reported when the same method later passes the entity variable to a
+    repository <code>save</code>/<code>saveAndFlush</code> or <code>EntityManager.merge</code>,
+    because that call writes the detached changes back.
+</p>
 </body>
 </html>

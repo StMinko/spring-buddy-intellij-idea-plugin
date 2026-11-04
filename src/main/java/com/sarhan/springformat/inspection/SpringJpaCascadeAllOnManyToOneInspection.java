@@ -16,6 +16,7 @@
 
 package com.sarhan.springformat.inspection;
 
+import com.intellij.codeInsight.AnnotationUtil;
 import com.intellij.codeInspection.AbstractBaseJavaLocalInspectionTool;
 import com.intellij.codeInspection.ProblemHighlightType;
 import com.intellij.codeInspection.ProblemsHolder;
@@ -24,6 +25,7 @@ import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiArrayInitializerMemberValue;
 import com.intellij.psi.PsiElementVisitor;
+import com.intellij.psi.PsiModifierList;
 import com.intellij.psi.PsiReferenceExpression;
 import org.jetbrains.annotations.NotNull;
 
@@ -58,7 +60,7 @@ public class SpringJpaCascadeAllOnManyToOneInspection extends AbstractBaseJavaLo
                 if (cascade == null) {
                     return;
                 }
-                if (referencesCascadeAll(cascade)) {
+                if (referencesCascadeAll(cascade) && !isExclusiveManyToOne(annotation, fqn)) {
                     holder.registerProblem(cascade,
                             "cascade = ALL on @ManyToOne/@ManyToMany is an anti-pattern; cascade only what the owning side controls",
                             ProblemHighlightType.ERROR);
@@ -74,6 +76,22 @@ public class SpringJpaCascadeAllOnManyToOneInspection extends AbstractBaseJavaLo
                 || "jakarta.persistence.ManyToMany".equals(fqn)
                 || "ManyToOne".equals(fqn)
                 || "ManyToMany".equals(fqn);
+    }
+
+    /**
+     * A {@code @ManyToOne} whose join column is {@code unique = true} is a one-to-one in disguise:
+     * the target row belongs to exactly one owner, so cascading ALL cannot reach a shared parent.
+     */
+    private static boolean isExclusiveManyToOne(PsiAnnotation annotation, String fqn) {
+        if (!SpringInspectionUtil.shortName(fqn).equals("ManyToOne")) {
+            return false;
+        }
+        if (!(annotation.getOwner() instanceof PsiModifierList modifiers)) {
+            return false;
+        }
+        PsiAnnotation joinColumn = SpringInspectionUtil.findAnyAnnotation(modifiers,
+                "jakarta.persistence.JoinColumn", "javax.persistence.JoinColumn");
+        return (joinColumn != null) && Boolean.TRUE.equals(AnnotationUtil.getBooleanAttributeValue(joinColumn, "unique"));
     }
 
     private static boolean referencesCascadeAll(PsiAnnotationMemberValue value) {

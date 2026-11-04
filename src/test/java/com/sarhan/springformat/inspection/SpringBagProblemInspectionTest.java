@@ -34,14 +34,14 @@ public class SpringBagProblemInspectionTest extends BasePlatformTestCase {
             package jakarta.persistence;
             import java.lang.annotation.*;
             @Target({ElementType.METHOD, ElementType.FIELD}) @Retention(RetentionPolicy.RUNTIME)
-            public @interface OneToMany {}
+            public @interface OneToMany { String mappedBy() default ""; }
             """;
 
     private static final String MANY_TO_MANY_STUB = """
             package jakarta.persistence;
             import java.lang.annotation.*;
             @Target({ElementType.METHOD, ElementType.FIELD}) @Retention(RetentionPolicy.RUNTIME)
-            public @interface ManyToMany {}
+            public @interface ManyToMany { String mappedBy() default ""; }
             """;
 
     private static final String JAVAX_ENTITY_STUB = """
@@ -55,7 +55,14 @@ public class SpringBagProblemInspectionTest extends BasePlatformTestCase {
             package javax.persistence;
             import java.lang.annotation.*;
             @Target({ElementType.METHOD, ElementType.FIELD}) @Retention(RetentionPolicy.RUNTIME)
-            public @interface OneToMany {}
+            public @interface OneToMany { String mappedBy() default ""; }
+            """;
+
+    private static final String ORDER_COLUMN_STUB = """
+            package jakarta.persistence;
+            import java.lang.annotation.*;
+            @Target({ElementType.METHOD, ElementType.FIELD}) @Retention(RetentionPolicy.RUNTIME)
+            public @interface OrderColumn {}
             """;
 
     @Override
@@ -66,6 +73,7 @@ public class SpringBagProblemInspectionTest extends BasePlatformTestCase {
         this.myFixture.addFileToProject("jakarta/persistence/ManyToMany.java", MANY_TO_MANY_STUB);
         this.myFixture.addFileToProject("javax/persistence/Entity.java", JAVAX_ENTITY_STUB);
         this.myFixture.addFileToProject("javax/persistence/OneToMany.java", JAVAX_ONE_TO_MANY_STUB);
+        this.myFixture.addFileToProject("jakarta/persistence/OrderColumn.java", ORDER_COLUMN_STUB);
     }
 
     public void testFlagsManyToManyList() {
@@ -110,6 +118,71 @@ public class SpringBagProblemInspectionTest extends BasePlatformTestCase {
                 class User {
                     @OneToMany
                     Set<Role> roles;
+                }
+                class Role {}
+                """);
+        this.myFixture.checkHighlighting(false, false, false, true);
+    }
+
+    public void testDoesNotFlagInverseSideOneToManyList() {
+        this.myFixture.enableInspections(new SpringBagProblemInspection());
+        this.myFixture.configureByText("Cart.java", """
+                import jakarta.persistence.*;
+                import java.util.List;
+
+                @Entity
+                class Cart {
+                    @OneToMany(mappedBy = "cart")
+                    List<CartItem> items;
+                }
+                class CartItem {}
+                """);
+        this.myFixture.checkHighlighting(false, false, false, true);
+    }
+
+    public void testDoesNotFlagInverseSideManyToManyList() {
+        this.myFixture.enableInspections(new SpringBagProblemInspection());
+        this.myFixture.configureByText("Role.java", """
+                import jakarta.persistence.*;
+                import java.util.List;
+
+                @Entity
+                class Role {
+                    @ManyToMany(mappedBy = "roles")
+                    List<User> users;
+                }
+                class User {}
+                """);
+        this.myFixture.checkHighlighting(false, false, false, true);
+    }
+
+    public void testFlagsEmptyMappedBy() {
+        this.myFixture.enableInspections(new SpringBagProblemInspection());
+        this.myFixture.configureByText("User.java", """
+                import jakarta.persistence.*;
+                import java.util.List;
+
+                @Entity
+                class User {
+                    @OneToMany(mappedBy = "")
+                    <warning descr="@OneToMany with List causes 'bag' semantics; use Set instead to avoid delete-all + re-insert performance issues">List<Address></warning> addresses;
+                }
+                class Address {}
+                """);
+        this.myFixture.checkHighlighting(false, false, false, true);
+    }
+
+    public void testDoesNotFlagOrderColumnList() {
+        this.myFixture.enableInspections(new SpringBagProblemInspection());
+        this.myFixture.configureByText("User.java", """
+                import jakarta.persistence.*;
+                import java.util.List;
+
+                @Entity
+                class User {
+                    @ManyToMany
+                    @OrderColumn
+                    List<Role> roles;
                 }
                 class Role {}
                 """);

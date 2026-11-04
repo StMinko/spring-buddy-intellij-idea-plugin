@@ -420,6 +420,32 @@ public class SpringLazyInitializationPredictionDataFlowInspectionTest extends Ba
                 .isZero();
     }
 
+    public void testDoesNotReportAssociationFetchedByOptionalQuery() {
+        this.configureLazyInitializationFixture("""
+                void process(Long id) {
+                    Order order = repo.findOptionalWithCustomerById(id).orElseThrow();
+                    order.getCustomer().getName();
+                }
+                """);
+
+        Assertions.assertThat(this.lazyInitializationProblemCount())
+                .as("an association fetched by an Optional source query stays initialized after unwrapping")
+                .isZero();
+    }
+
+    public void testReportsOptionalOrElseFallbackForFetchedQuery() {
+        this.configureLazyInitializationFixture("""
+                void process(Long id) {
+                    Order order = repo.findOptionalWithCustomerById(id).orElse(repo.findById(id));
+                    order.getCustomer().getName();
+                }
+                """);
+
+        Assertions.assertThat(this.lazyInitializationProblemCount())
+                .as("orElse may return an entity the source query did not fetch")
+                .isEqualTo(1);
+    }
+
     public void testDoesNotReportAssociationFetchedByEntityGraph() {
         this.configureLazyInitializationFixture("""
                 void process(Long id) {
@@ -486,6 +512,9 @@ public class SpringLazyInitializationPredictionDataFlowInspectionTest extends Ba
 
                     @Query("select o from Order o join fetch o.customer")
                     Order findWithCustomerById(Long id);
+
+                    @Query("select o from Order o join fetch o.customer")
+                    java.util.Optional<Order> findOptionalWithCustomerById(Long id);
 
                     @EntityGraph(attributePaths = "customer")
                     Order findWithCustomerGraphById(Long id);

@@ -48,8 +48,9 @@ import org.jetbrains.annotations.NotNull;
  */
 public class SpringTransactionalDirtyCheckingDataFlowInspection extends AbstractBaseJavaLocalInspectionTool {
 
-    private static final Set<String> WRITE_METHODS = Set.of("save", "saveAll", "delete", "deleteAll", "deleteById",
-            "update", "persist", "merge", "flush", "remove");
+    private static final Set<String> WRITE_METHODS = Set.of("save", "saveAll", "saveAndFlush", "saveAllAndFlush",
+            "delete", "deleteAll", "deleteById", "deleteAllById", "deleteInBatch", "deleteAllInBatch",
+            "deleteAllByIdInBatch", "update", "persist", "merge", "flush", "remove");
 
     @Override
     @NotNull
@@ -115,7 +116,8 @@ public class SpringTransactionalDirtyCheckingDataFlowInspection extends Abstract
     private static boolean isKnownWriteOperation(PsiMethodCallExpression call) {
         PsiMethod resolved = call.resolveMethod();
         if (resolved != null) {
-            return isKnownWriteMethod(resolved) && isPersistenceMethod(resolved);
+            return (WRITE_METHODS.contains(resolved.getName()) && isPersistenceMethod(resolved))
+                    || hasWriteLock(resolved);
         }
         String name = call.getMethodExpression().getReferenceName();
         if (name == null || !WRITE_METHODS.contains(name)) {
@@ -131,11 +133,16 @@ public class SpringTransactionalDirtyCheckingDataFlowInspection extends Abstract
                 || isJpaEntityManagerOrQueryClass(qualifierClass));
     }
 
-    private static boolean isKnownWriteMethod(PsiMethod method) {
-        String name = method.getName();
-        return name.equals("save") || name.equals("saveAll") || name.equals("delete") || name.equals("deleteAll")
-                || name.equals("deleteById") || name.equals("persist") || name.equals("merge") || name.equals("flush")
-                || name.equals("remove");
+    // A write lock (PESSIMISTIC_WRITE, *_FORCE_INCREMENT) declares intent to modify the loaded row.
+    private static boolean hasWriteLock(PsiMethod method) {
+        PsiAnnotation lock = SpringInspectionUtil.findAnnotation(method.getModifierList(),
+                "org.springframework.data.jpa.repository.Lock", "Lock");
+        PsiAnnotationMemberValue value = (lock != null) ? lock.findAttributeValue("value") : null;
+        if (value == null) {
+            return false;
+        }
+        String mode = value.getText();
+        return mode.endsWith("WRITE") || mode.endsWith("FORCE_INCREMENT");
     }
 
     private static boolean isPersistenceMethod(PsiMethod method) {

@@ -21,6 +21,7 @@ import com.intellij.codeInspection.ProblemHighlightType;
 import com.intellij.codeInspection.ProblemsHolder;
 import com.intellij.psi.JavaElementVisitor;
 import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiCatchSection;
 import com.intellij.psi.PsiCodeBlock;
 import com.intellij.psi.PsiElement;
@@ -28,6 +29,7 @@ import com.intellij.psi.PsiElementVisitor;
 import com.intellij.psi.PsiExpressionStatement;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
+import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiStatement;
 import com.intellij.psi.PsiThrowStatement;
 import com.intellij.psi.PsiTryStatement;
@@ -93,13 +95,26 @@ public class SpringEventListenerSwallowsExceptionInspection extends AbstractBase
                 continue;
             }
             if ("org.springframework.context.event.EventListener".equals(fqn)
-                    || "org.springframework.transaction.event.TransactionalEventListener".equals(fqn)
-                    || "EventListener".equals(fqn)
-                    || "TransactionalEventListener".equals(fqn)) {
+                    || "EventListener".equals(fqn)) {
                 return true;
+            }
+            if ("org.springframework.transaction.event.TransactionalEventListener".equals(fqn)
+                    || "TransactionalEventListener".equals(fqn)) {
+                return isBeforeCommit(annotation);
             }
         }
         return false;
+    }
+
+    /*
+     * AFTER_COMMIT (the default), AFTER_ROLLBACK and AFTER_COMPLETION listeners run in
+     * TransactionSynchronization.afterCompletion, which Spring wraps in a catch-and-log: a rethrow
+     * never reaches the publisher and the transaction is already finished. Only BEFORE_COMMIT
+     * propagates, so only there is a swallowed exception a lost signal.
+     */
+    private static boolean isBeforeCommit(PsiAnnotation annotation) {
+        PsiAnnotationMemberValue phase = annotation.findDeclaredAttributeValue("phase");
+        return phase instanceof PsiReferenceExpression ref && "BEFORE_COMMIT".equals(ref.getReferenceName());
     }
 
     private static boolean isBroadCatch(PsiCatchSection section) {

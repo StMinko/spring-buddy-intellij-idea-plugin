@@ -320,6 +320,11 @@ public class SpringLazyInitializationPredictionDataFlowInspection extends Abstra
                 if (resolved != null && this.sourceDetector.isDetachedEntitySource(resolved)) {
                     return resolved;
                 }
+                String name = call.getMethodExpression().getReferenceName();
+                PsiExpression qualifier = call.getMethodExpression().getQualifierExpression();
+                if (qualifier != null && ("get".equals(name) || "orElseThrow".equals(name))) {
+                    return directSourceMethod(qualifier);
+                }
             }
             return null;
         }

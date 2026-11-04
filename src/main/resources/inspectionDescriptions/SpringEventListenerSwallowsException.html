@@ -7,5 +7,10 @@ and only logs without rethrowing.
     Spring then never sees the failure: publishers can't react and transactional rollback rules
     won't trigger. Catch a more specific exception and handle it explicitly, or log and rethrow.
 </p>
+<p>
+    <code>@TransactionalEventListener</code> methods are reported only for <code>phase = BEFORE_COMMIT</code>.
+    The other phases (including the default <code>AFTER_COMMIT</code>) run after the transaction finished, and
+    Spring catches and logs whatever they throw, so a local catch-and-log loses nothing.
+</p>
 </body>
 </html>

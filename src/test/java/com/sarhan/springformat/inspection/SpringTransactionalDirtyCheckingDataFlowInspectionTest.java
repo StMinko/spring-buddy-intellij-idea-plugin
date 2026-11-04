@@ -177,6 +177,89 @@ public class SpringTransactionalDirtyCheckingDataFlowInspectionTest extends Base
                 class User { void setName(String name) { } }
                 interface UserRepository { User findById(Long id); User save(User user); }
                 """);
+        assertNoDirtyCheckingProblem();
+    }
+
+    public void testDoesNotReportSaveAndFlushWrite() {
+        this.myFixture.enableInspections(new SpringTransactionalDirtyCheckingDataFlowInspection());
+        this.myFixture.addFileToProject("org/springframework/data/repository/Repository.java",
+                "package org.springframework.data.repository; public interface Repository<T, ID> {}");
+        this.myFixture.configureByText("UserService.java", """
+                import org.springframework.data.repository.Repository;
+                class UserService {
+                    UserRepository userRepository;
+                
+                    @Transactional
+                    void update(Long id) {
+                        User user = userRepository.findById(id);
+                        user.setName("real");
+                        userRepository.saveAndFlush(user);
+                    }
+                }
+                class User { void setName(String name) { } }
+                interface UserRepository extends Repository<User, Long> { User findById(Long id); User saveAndFlush(User user); }
+                """);
+        assertNoDirtyCheckingProblem();
+    }
+
+    public void testDoesNotReportWhenEntityIsLoadedWithWriteLock() {
+        this.myFixture.enableInspections(new SpringTransactionalDirtyCheckingDataFlowInspection());
+        this.myFixture.addFileToProject("jakarta/persistence/LockModeType.java",
+                "package jakarta.persistence; public enum LockModeType { PESSIMISTIC_READ, PESSIMISTIC_WRITE }");
+        this.myFixture.addFileToProject("org/springframework/data/jpa/repository/Lock.java", """
+                package org.springframework.data.jpa.repository;
+                public @interface Lock { jakarta.persistence.LockModeType value(); }
+                """);
+        this.myFixture.configureByText("UserService.java", """
+                import jakarta.persistence.LockModeType;
+                import org.springframework.data.jpa.repository.Lock;
+                class UserService {
+                    UserRepository userRepository;
+                
+                    @Transactional
+                    void accept(Long id) {
+                        User user = userRepository.findById(id);
+                        User locked = userRepository.lockById(id);
+                        user.setName("real");
+                        locked.setName("real");
+                    }
+                }
+                class User { void setName(String name) { } }
+                interface UserRepository {
+                    User findById(Long id);
+                    @Lock(LockModeType.PESSIMISTIC_WRITE)
+                    User lockById(Long id);
+                }
+                """);
+        assertNoDirtyCheckingProblem();
+    }
+
+    public void testReportsWhenEntityIsLoadedWithReadLockOnly() {
+        this.myFixture.enableInspections(new SpringTransactionalDirtyCheckingDataFlowInspection());
+        this.myFixture.addFileToProject("jakarta/persistence/LockModeType.java",
+                "package jakarta.persistence; public enum LockModeType { PESSIMISTIC_READ, PESSIMISTIC_WRITE }");
+        this.myFixture.addFileToProject("org/springframework/data/jpa/repository/Lock.java", """
+                package org.springframework.data.jpa.repository;
+                public @interface Lock { jakarta.persistence.LockModeType value(); }
+                """);
+        this.myFixture.configureByText("UserService.java", """
+                import jakarta.persistence.LockModeType;
+                import org.springframework.data.jpa.repository.Lock;
+                class UserService {
+                    UserRepository userRepository;
+                
+                    @Transactional
+                    void <warning descr="@Transactional method loads and mutates an entity without readOnly=true; dirty checking may persist temporary changes">calculate</warning>(Long id) {
+                        User user = userRepository.lockById(id);
+                        user.setName("temporary");
+                    }
+                }
+                class User { void setName(String name) { } }
+                interface UserRepository {
+                    @Lock(LockModeType.PESSIMISTIC_READ)
+                    User lockById(Long id);
+                }
+                """);
         this.myFixture.checkHighlighting(false, false, true, true);
     }
 
@@ -304,5 +387,11 @@ public class SpringTransactionalDirtyCheckingDataFlowInspectionTest extends Base
                 }
                 """);
         this.myFixture.checkHighlighting(false, false, true, true);
+    }
+
+    private void assertNoDirtyCheckingProblem() {
+        assertTrue(this.myFixture.doHighlighting().stream()
+                .noneMatch(info -> info.getDescription() != null
+                        && info.getDescription().startsWith("@Transactional method loads and mutates")));
     }
 }

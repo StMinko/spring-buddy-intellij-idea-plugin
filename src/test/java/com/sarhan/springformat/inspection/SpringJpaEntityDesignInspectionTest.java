@@ -174,6 +174,29 @@ public class SpringJpaEntityDesignInspectionTest extends BasePlatformTestCase {
         this.myFixture.checkHighlighting(false, false, true, true);
     }
 
+    public void testDoesNotReportPlainTextOrArrayColumnDefinition() {
+        this.myFixture.enableInspections(new SpringJpaEntityDesignInspection.MissingLobForClobColumn());
+        this.myFixture.configureByText("Article.java", """
+                @Entity
+                class Article {
+                    @Column(columnDefinition = "text")
+                    java.lang.String body;
+
+                    @Column(columnDefinition = "text[]", nullable = false)
+                    java.lang.String[] tags;
+
+                    @Column(columnDefinition = "jsonb")
+                    java.lang.String payload;
+                }
+                @interface Entity { }
+                @interface Column { String columnDefinition() default ""; boolean nullable() default true; }
+                """);
+        org.assertj.core.api.Assertions.assertThat(this.myFixture.doHighlighting())
+                .as("plain text, arrays and jsonb are ordinary columns, not large objects")
+                .noneMatch(highlight -> highlight.getDescription() != null
+                        && highlight.getDescription().startsWith("@Column large-object definition"));
+    }
+
     public void testDoesNotReportClobColumnWhenLobPresent() {
         this.myFixture.enableInspections(new SpringJpaEntityDesignInspection.MissingLobForClobColumn());
         this.myFixture.configureByText("Article.java", """

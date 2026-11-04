@@ -16,6 +16,7 @@
 
 package com.sarhan.springformat.inspection;
 
+import com.intellij.codeInsight.daemon.impl.HighlightInfo;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 
 /**
@@ -62,6 +63,38 @@ public class SpringJpaCascadeAllOnManyToOneInspectionTest extends BasePlatformTe
                     Parent parent;
                 }
                 """);
+        assertEquals(0, cascadeAllProblems());
+    }
+
+    public void testDoesNotFlagManyToOneWithUniqueJoinColumn() {
+        this.myFixture.enableInspections(new SpringJpaCascadeAllOnManyToOneInspection());
+        this.myFixture.configureByText("Sample.java", """
+                @interface ManyToOne { CascadeType[] cascade() default {}; }
+                @interface JoinColumn { String name() default ""; boolean unique() default false; }
+                enum CascadeType { ALL }
+                class Voucher {}
+                class Item {
+                    @ManyToOne(cascade = CascadeType.ALL)
+                    @JoinColumn(name = "VOUCHER", unique = true)
+                    Voucher voucher;
+                }
+                """);
+        assertEquals(0, cascadeAllProblems());
+    }
+
+    public void testFlagsManyToOneWithNonUniqueJoinColumn() {
+        this.myFixture.enableInspections(new SpringJpaCascadeAllOnManyToOneInspection());
+        this.myFixture.configureByText("Sample.java", """
+                @interface ManyToOne { CascadeType[] cascade() default {}; }
+                @interface JoinColumn { String name() default ""; boolean unique() default false; }
+                enum CascadeType { ALL }
+                class Amount {}
+                class Message {
+                    @ManyToOne(cascade = <warning descr="cascade = ALL on @ManyToOne/@ManyToMany is an anti-pattern; cascade only what the owning side controls">CascadeType.ALL</warning>)
+                    @JoinColumn(name = "AMOUNT", unique = false)
+                    Amount amount;
+                }
+                """);
         this.myFixture.checkHighlighting(false, false, true, true);
     }
 
@@ -76,6 +109,14 @@ public class SpringJpaCascadeAllOnManyToOneInspectionTest extends BasePlatformTe
                     java.util.List<Child> children;
                 }
                 """);
-        this.myFixture.checkHighlighting(false, false, true, true);
+        assertEquals(0, cascadeAllProblems());
+    }
+
+    private int cascadeAllProblems() {
+        return (int) this.myFixture.doHighlighting()
+                .stream()
+                .filter((HighlightInfo h) -> (h.getDescription() != null)
+                        && h.getDescription().startsWith("cascade = ALL on @ManyToOne/@ManyToMany"))
+                .count();
     }
 }

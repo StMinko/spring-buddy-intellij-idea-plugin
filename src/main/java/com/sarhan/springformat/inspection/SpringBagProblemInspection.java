@@ -25,10 +25,12 @@ import com.intellij.openapi.project.Project;
 import com.intellij.psi.JavaElementVisitor;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnnotation;
+import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElementVisitor;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiJavaFile;
+import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiModifierList;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeElement;
@@ -70,7 +72,7 @@ public class SpringBagProblemInspection extends AbstractBaseJavaLocalInspectionT
                 }
                 PsiType type = field.getType();
                 String typeText = type.getCanonicalText();
-                if (!isList(typeText)) {
+                if (!isList(typeText) || isInverseSide(annotation) || hasOrderColumn(field)) {
                     return;
                 }
                 String annotationName = annotation.getQualifiedName();
@@ -108,6 +110,38 @@ public class SpringBagProblemInspection extends AbstractBaseJavaLocalInspectionT
             }
         }
         return null;
+    }
+
+    /** Hibernate never recreates an inverse ({@code mappedBy}) collection; the owning side writes the rows. */
+    private static boolean isInverseSide(PsiAnnotation annotation) {
+        PsiAnnotationMemberValue mappedBy = annotation.findDeclaredAttributeValue("mappedBy");
+        if (mappedBy == null) {
+            return false;
+        }
+        if (mappedBy instanceof PsiLiteralExpression literal) {
+            return literal.getValue() instanceof String value && !value.isEmpty();
+        }
+        return true;
+    }
+
+    /** {@code @OrderColumn} maps the List as an indexed list, not a bag. */
+    private static boolean hasOrderColumn(PsiField field) {
+        PsiModifierList modifiers = field.getModifierList();
+        if (modifiers == null) {
+            return false;
+        }
+        for (PsiAnnotation annotation : modifiers.getAnnotations()) {
+            String fqn = annotation.getQualifiedName();
+            if (fqn == null && annotation.getNameReferenceElement() != null) {
+                fqn = annotation.getNameReferenceElement().getText();
+            }
+            if ("jakarta.persistence.OrderColumn".equals(fqn)
+                    || "javax.persistence.OrderColumn".equals(fqn)
+                    || "OrderColumn".equals(fqn)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isList(String typeText) {
