@@ -429,9 +429,14 @@
     <inspection_tool class="SpringBoot4HttpMessageConverterBean" enabled="true" level="ERROR" enabled_by_default="true" groups="spring-boot 3 -> 4 migration"/>
     <inspection_tool class="SpringBoot4ActuatorSpringLangNullable" enabled="true" level="ERROR" enabled_by_default="true" groups="spring-boot 3 -> 4 migration"/>
     <inspection_tool class="SpringBoot4PropertyMapperAlwaysApplying" enabled="true" level="ERROR" enabled_by_default="true" groups="spring-boot 3 -> 4 migration"/>
+    <inspection_tool class="SpringBoot4JacksonApi" enabled="true" level="ERROR" enabled_by_default="true" groups="spring-boot 3 -> 4 migration"/>
+    <inspection_tool class="SpringBoot4JsonPathMatcher" enabled="true" level="ERROR" enabled_by_default="true" groups="spring-boot 3 -> 4 migration"/>
+    <inspection_tool class="SpringBoot4JacksonConstructorDefaults" enabled="true" level="ERROR" enabled_by_default="true" groups="spring-boot 3 -> 4 migration"/>
+    <inspection_tool class="SpringBoot4JacksonIoException" enabled="true" level="WARNING" enabled_by_default="true" groups="spring-boot 3 -> 4 migration"/>
     <inspection_tool class="SpringBoot4HibernateProcessor" enabled="true" level="ERROR" enabled_by_default="true" groups="spring-boot 3 -> 4 migration"/>
     <inspection_tool class="SpringBoot4UnmanagedDependency" enabled="true" level="ERROR" enabled_by_default="true" groups="spring-boot 3 -> 4 migration"/>
     <inspection_tool class="SpringBoot4RemovedBuildFeature" enabled="true" level="ERROR" enabled_by_default="true" groups="spring-boot 3 -> 4 migration"/>
+    <inspection_tool class="SpringBoot4HibernateArtifacts" enabled="true" level="WARNING" enabled_by_default="true" groups="spring-boot 3 -> 4 migration"/>
 
     <inspection_tool class="SpringOrphanedApplicationEvent" enabled="true" level="WARNING" enabled_by_default="true" groups="pitfalls"/>
     <inspection_tool class="SpringInMemoryFiltering" enabled="true" level="WARNING" enabled_by_default="true" groups="pitfalls"/>

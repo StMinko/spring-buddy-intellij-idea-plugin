@@ -87,6 +87,20 @@ public class SpringBoot4FileMigrationInspection extends LocalInspectionTool {
     private static final Pattern GRADLE_DISTRIBUTION_VERSION = Pattern.compile(
             "gradle-([0-9]+)\\.([0-9]+)(\\.[0-9]+)?-(?:bin|all)\\.zip");
 
+    /**
+     * Hibernate 7 needs the new hypersistence-utils artifact line and the Jackson 3
+     * hibernate module moved to tools.jackson.datatype.
+     */
+    private static final Pattern HYPERSISTENCE_HIBERNATE_63 = Pattern.compile("hypersistence-utils-hibernate-63(?![\\w-])");
+
+    private static final Pattern HIBERNATE_DATAFORMAT_ARTIFACT = Pattern.compile("jackson-datatype-hibernate[56](?![\\w-])");
+
+    private static final Pattern MAVEN_JACKSON_DATATYPE_GROUP = Pattern.compile(
+            "<groupId>com\\.fasterxml\\.jackson\\.datatype</groupId>(?=\\s*<artifactId>jackson-datatype-hibernate7</artifactId>)");
+
+    private static final Pattern GRADLE_JACKSON_DATATYPE_GROUP = Pattern.compile(
+            "com\\.fasterxml\\.jackson\\.datatype(?=:jackson-datatype-hibernate7)");
+
     private static final Pattern KOTLIN_GRADLE_VERSION = Pattern.compile(
             "org\\.jetbrains\\.kotlin[a-z.\\-]*[:\\s]([0-9]+)\\.([0-9]+)(?:\\.[0-9]+)?");
 
@@ -169,6 +183,8 @@ public class SpringBoot4FileMigrationInspection extends LocalInspectionTool {
             case BUILD_TOOL_VERSION -> hasTooOldGradle(text) || hasTooOldKotlin(text);
             case TEST_STARTER_MODULES -> hasMissingModularTestStarter(text);
             case HIBERNATE_PROCESSOR -> HIBERNATE_JPAMODELGEN.matcher(text).find();
+            case HIBERNATE_ARTIFACTS -> HYPERSISTENCE_HIBERNATE_63.matcher(text).find()
+                    || HIBERNATE_DATAFORMAT_ARTIFACT.matcher(text).find();
             case UNMANAGED_DEPENDENCY -> MAVEN_UNVERSIONED_RETRY.matcher(text).find()
                     || GRADLE_UNVERSIONED_RETRY.matcher(text).find()
                     || text.contains("spring-authorization-server.version");
@@ -192,7 +208,7 @@ public class SpringBoot4FileMigrationInspection extends LocalInspectionTool {
     private static boolean isRelevantFile(Kind kind, String name) {
         return switch (kind) {
             case UNDERTOW_STARTER, RENAMED_STARTER, JACKSON_COORDINATES, TEST_STARTER_MODULES, HIBERNATE_PROCESSOR,
-                    UNMANAGED_DEPENDENCY, REMOVED_BUILD_FEATURE ->
+                    UNMANAGED_DEPENDENCY, REMOVED_BUILD_FEATURE, HIBERNATE_ARTIFACTS ->
                 isBuildFile(name);
             case RENAMED_PROPERTIES -> isApplicationConfig(name);
             case BUILD_TOOL_VERSION -> isBuildFile(name) || name.equals("gradle-wrapper.properties");
@@ -287,6 +303,9 @@ public class SpringBoot4FileMigrationInspection extends LocalInspectionTool {
                 + " dependency management"),
         UNMANAGED_DEPENDENCY("Spring Boot 4 no longer manages Spring Retry (an explicit version is required)"
                 + " or the spring-authorization-server.version property (use spring-security.version)"),
+        HIBERNATE_ARTIFACTS("Hibernate 7 and Jackson 3 need updated artifact coordinates:"
+                + " jackson-datatype-hibernate5/6 becomes tools.jackson.datatype:jackson-datatype-hibernate7"
+                + " and hypersistence-utils-hibernate-63 becomes hypersistence-utils-hibernate-71"),
         REMOVED_BUILD_FEATURE("This build feature was removed in Spring Boot 4 (embedded launch scripts, Spring Session"
                 + " Hazelcast/MongoDB, Spring Pulsar Reactive or Spock integration)");
 
@@ -305,6 +324,15 @@ public class SpringBoot4FileMigrationInspection extends LocalInspectionTool {
                 case RENAMED_PROPERTIES -> renamedPropertyFix(text);
                 case HIBERNATE_PROCESSOR -> new RegexReplaceFix("Replace with hibernate-processor",
                         HIBERNATE_JPAMODELGEN, "hibernate-processor");
+                case HIBERNATE_ARTIFACTS -> new CompositeFix("Replace with Hibernate 7 and Jackson 3 coordinates",
+                        new RegexReplaceFix("Replace the Hibernate Jackson module artifact",
+                                HIBERNATE_DATAFORMAT_ARTIFACT, "jackson-datatype-hibernate7"),
+                        new RegexReplaceFix("Replace the Maven groupId with tools.jackson.datatype",
+                                MAVEN_JACKSON_DATATYPE_GROUP, "<groupId>tools.jackson.datatype</groupId>"),
+                        new RegexReplaceFix("Replace the Gradle notation with tools.jackson.datatype",
+                                GRADLE_JACKSON_DATATYPE_GROUP, "tools.jackson.datatype"),
+                        new RegexReplaceFix("Replace hypersistence-utils with the Hibernate 7 line",
+                                HYPERSISTENCE_HIBERNATE_63, "hypersistence-utils-hibernate-71"));
                 default -> null;
             };
         }
@@ -552,6 +580,12 @@ public class SpringBoot4FileMigrationInspection extends LocalInspectionTool {
     public static class HibernateProcessor extends SpringBoot4FileMigrationInspection {
         public HibernateProcessor() {
             super(Kind.HIBERNATE_PROCESSOR);
+        }
+    }
+
+    public static class HibernateArtifacts extends SpringBoot4FileMigrationInspection {
+        public HibernateArtifacts() {
+            super(Kind.HIBERNATE_ARTIFACTS);
         }
     }
 

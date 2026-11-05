@@ -1,0 +1,37 @@
+<html>
+<body>
+Reports calls on Jackson 2 types whose method signature changed or disappeared
+in Jackson 3 (Spring Boot 4). The renames are verified against the Jackson 3 jars:
+<ul>
+    <li><code>JsonGenerator</code>: <code>writeFieldName()</code> &rarr; <code>writeName()</code>,
+        <code>writeObjectField()</code> &rarr; <code>writePOJOProperty()</code>,
+        the <code>*Field</code>/<code>*FieldStart</code> family to the <code>*Property</code> family,
+        <code>writeObject()</code> &rarr; <code>writePOJO()</code></li>
+    <li><code>JsonParser</code>: <code>getCurrentToken()</code>/<code>getCurrentName()</code> and the other
+        <code>getCurrent*</code> accessors to the <code>current*</code> accessors,
+        <code>nextFieldName()</code> &rarr; <code>nextName()</code>;
+        <code>readValuesAs()</code> was removed without a counterpart</li>
+    <li><code>ObjectReader</code>/<code>ObjectWriter</code>: <code>withType()</code> &rarr; <code>forType()</code>;
+        <code>readValue(value, type)</code> on <code>ObjectReader</code> becomes
+        <code>forType(type).readValue(value)</code></li>
+    <li><code>JsonNode</code>: <code>isContainerNode()</code> &rarr; <code>isContainer()</code>,
+        <code>findValuesAsText()</code> &rarr; <code>findValuesAsString()</code>,
+        <code>fieldNames()</code> &rarr; <code>propertyNames()</code>,
+        <code>fields()</code>/<code>elements()</code> &rarr; <code>properties()</code>/<code>values()</code>,
+        <code>with()</code> &rarr; <code>withObject()</code></li>
+    <li><code>ObjectMapper</code>: <code>getSerializationConfig()</code>/<code>getDeserializationConfig()</code>
+        &rarr; <code>serializationConfig()</code>/<code>deserializationConfig()</code>,
+        <code>writerWithType()</code> &rarr; <code>writerFor()</code>; configuration setters such as
+        <code>registerModule()</code>, <code>setSerializationInclusion()</code> and
+        <code>setDateFormat()</code> moved behind <code>JsonMapper.builder()</code></li>
+</ul>
+<p>
+    Spring Boot 4 upgrades to Jackson 3, so the old calls no longer compile. Methods that
+    merely moved behind the builder API are reported without a quick fix, because the
+    replacement restructures how the mapper is built.
+</p>
+<p>
+    Quick fix rewrites the call in place for the mechanical renames.
+</p>
+</body>
+</html>

@@ -106,7 +106,8 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
                             ProblemHighlightType.ERROR, new RemoveClassTransactionalAnnotationFix());
                 }
                 if (SpringTransactionalPrivateMethodInspection.this.thisKind(Kind.REPOSITORY_TRANSACTION)
-                        && hasTransactionalAnnotation(psiClass) && isRepositoryClass(psiClass)) {
+                        && hasTransactionalAnnotation(psiClass) && isRepositoryClass(psiClass)
+                        && !isReadOnly(findTransactionalAnnotation(psiClass.getModifierList()))) {
                     PsiIdentifier nameIdentifier = psiClass.getNameIdentifier();
                     holder.registerProblem((nameIdentifier != null) ? nameIdentifier : psiClass,
                             "Repository-level @Transactional is too narrow; prefer service-layer transaction boundaries",
@@ -133,7 +134,7 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
             public void visitMethod(@NotNull PsiMethod method) {
                 PsiModifierList modifiers = method.getModifierList();
                 if (SpringTransactionalPrivateMethodInspection.this.thisKind(Kind.ASYNC_TRANSACTIONAL_EVENT_LISTENER)
-                        && hasAnnotation(modifiers, "Async") && hasAnnotation(modifiers, "TransactionalEventListener")) {
+                        && hasAnnotation(modifiers, "Async") && listensBeforeCommit(modifiers)) {
                     holder.registerProblem((method.getNameIdentifier() != null) ? method.getNameIdentifier() : method,
                             "Potential data race: @Async with @TransactionalEventListener may read data before commit is fully visible",
                             ProblemHighlightType.ERROR, new RemoveAsyncAnnotationFix());
@@ -415,6 +416,19 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
             }
         });
         return found[0];
+    }
+
+    // AFTER_COMMIT (the default), AFTER_ROLLBACK and AFTER_COMPLETION run once the transaction has ended,
+    // so the async thread only sees committed state. BEFORE_COMMIT runs while the transaction is still open.
+    private static boolean listensBeforeCommit(PsiModifierList modifiers) {
+        PsiAnnotation listener = SpringInspectionUtil.findAnnotation(modifiers,
+                "org.springframework.transaction.event.TransactionalEventListener", "TransactionalEventListener");
+        if (listener == null) {
+            return false;
+        }
+        PsiAnnotationMemberValue phase = listener.findDeclaredAttributeValue("phase");
+        return phase instanceof PsiReferenceExpression reference
+                && "BEFORE_COMMIT".equals(reference.getReferenceName());
     }
 
     private static boolean isRepositoryClass(PsiClass psiClass) {

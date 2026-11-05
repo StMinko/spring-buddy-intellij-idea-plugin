@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.sarhan.springformat"
-version = "1.0.5"
+version = "1.0.7"
 
 repositories {
     mavenCentral()
@@ -42,7 +42,7 @@ dependencies {
 intellijPlatform {
     pluginConfiguration {
         name = "Spring Buddy"
-        version = "1.0.5"
+        version = "1.0.7"
         description = """
             <h2>Make invisible Spring runtime behavior visible.</h2>
               <p>
@@ -70,6 +70,23 @@ intellijPlatform {
               </p>
         """.trimIndent()
         changeNotes = """
+            <h3>1.0.7</h3>
+            <ul>
+              <li><b>Fewer false positives for <code>@Async</code> with <code>@TransactionalEventListener</code>:</b> only listeners with <code>phase = BEFORE_COMMIT</code> are reported. The default <code>AFTER_COMMIT</code> phase, and <code>AFTER_ROLLBACK</code> and <code>AFTER_COMPLETION</code>, start the async task after the transaction has completed, so the listener only sees committed data.</li>
+              <li><b>Fewer false positives for repository-level <code>@Transactional</code>:</b> <code>@Transactional(readOnly = true)</code> on a repository interface is no longer reported. Spring Data JPA recommends this pattern for declared query methods, and a service-layer transaction still overrides it. Writable repository-level <code>@Transactional</code> is still reported.</li>
+              <li><b>Fewer false positives in the dirty-checking check:</b> passing a loaded entity to a writable <code>@Transactional</code> method of another bean now counts as an intentional write. Before, such methods were reported and the quick fix offered <code>readOnly = true</code>, which would have stopped the change from being saved. Passing the entity to a read-only bean is still reported.</li>
+            </ul>
+            <h3>1.0.6</h3>
+            <ul>
+              <li><b>Jackson 3 API migration:</b> new inspection reports Jackson 2 calls that were renamed or removed in Jackson 3, such as <code>JsonGenerator.writeFieldName()</code>, <code>JsonParser.getCurrentToken()</code>, <code>ObjectReader.readValue(value, type)</code>, <code>JsonNode.fields()</code> and the <code>ObjectMapper</code> setters that moved behind <code>JsonMapper.builder()</code>. A quick fix rewrites the mechanical renames in place.</li>
+              <li><b>Jackson 3 constructor defaults:</b> new inspection reports classes where Jackson 3 binds the all-args constructor and skips field initializers. A quick fix marks the no-arg constructor <code>@JsonCreator</code>, or adds <code>onConstructor_ = @JsonCreator</code> to a Lombok <code>@NoArgsConstructor</code>.</li>
+              <li><b>Jackson 3 unchecked exceptions:</b> new inspection reports <code>IOException</code> catches around Jackson calls, which no longer fire because Jackson 3 throws the unchecked <code>JacksonException</code>. A quick fix widens the catch to <code>IOException | JacksonException</code> when the catch block keeps compiling.</li>
+              <li><b>WebTestClient <code>jsonPath</code> overload removal:</b> new inspection reports the <code>jsonPath(String, Object...)</code> overload removed in Spring Framework 7. A quick fix chains <code>.value(matcher)</code> for Hamcrest matchers, which the old overload never asserted, or formats template arguments into the expression with <code>formatted()</code>.</li>
+              <li><b>Hibernate 7 artifacts:</b> new build-file inspection reports <code>jackson-datatype-hibernate5/6</code> and <code>hypersistence-utils-hibernate-63</code>. A quick fix moves them to <code>tools.jackson.datatype:jackson-datatype-hibernate7</code> and <code>hypersistence-utils-hibernate-71</code>.</li>
+              <li><b>More Jackson 3 type renames:</b> <code>JsonParseException</code>, <code>JsonGenerationException</code>, <code>JsonFactory</code>, <code>Module</code>, <code>BeanSerializerModifier</code>, filter providers and other types now map to their Jackson 3 names. <code>ObjectCodec</code> is reported as removed.</li>
+              <li><b>More Spring Boot 4 relocations:</b> Hibernate/JPA auto-configuration classes, <code>TestEntityManager</code>, <code>@AutoConfigureDataJpa</code>, <code>@AutoConfigureTestDatabase</code>, <code>@AutoConfigureWebTestClient</code> and <code>JacksonAutoConfiguration</code> are reported with their new packages.</li>
+              <li><b>WebTestClient in <code>@SpringBootTest</code>:</b> an autowired <code>WebTestClient</code> without <code>@AutoConfigureWebTestClient</code> is now reported, with a quick fix that adds the annotation.</li>
+            </ul>
             <h3>1.0.5</h3>
             <ul>
               <li><b>Fewer false positives in service swallowed-exception checks:</b> a broad <code>catch</code> that logs the failure at info level or higher (<code>info</code>, <code>warn</code>, <code>error</code>, and similar) is no longer reported. A catch that only logs at debug level is still reported.</li>

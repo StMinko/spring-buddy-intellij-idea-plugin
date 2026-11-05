@@ -1,12 +1,13 @@
 <html>
 <body>
-Reports <code>@Autowired</code> <code>MockMvc</code> or <code>TestRestTemplate</code> fields in
-<code>@SpringBootTest</code> classes that lack <code>@AutoConfigureMockMvc</code> /
+Reports <code>@Autowired</code> <code>MockMvc</code>, <code>WebTestClient</code> or
+<code>TestRestTemplate</code> fields in <code>@SpringBootTest</code> classes that lack
+<code>@AutoConfigureMockMvc</code> / <code>@AutoConfigureWebTestClient</code> /
 <code>@AutoConfigureTestRestTemplate</code>.
 <p>
     Spring Boot 4 no longer configures these clients for <code>@SpringBootTest</code>, so the test
-    context fails with a missing <code>MockMvc</code>/<code>TestRestTemplate</code> bean.
-    Quick fix adds the missing annotation to the test class.
+    context fails with a missing <code>MockMvc</code>/<code>WebTestClient</code>/
+    <code>TestRestTemplate</code> bean. Quick fix adds the missing annotation to the test class.
 </p>
 </body>
 </html>

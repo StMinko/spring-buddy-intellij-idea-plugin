@@ -1,0 +1,19 @@
+<html>
+<body>
+Reports classes that expose both a no-arg constructor and a single public constructor
+with parameters while at least one field carries a field initializer.
+<p>
+    Jackson 3 prefers a public all-args constructor as soon as parameter names are
+    compiled in (<code>-parameters</code>), where Jackson 2 picked the no-arg
+    constructor and applied setters on top. The all-args path bypasses the field
+    initializers, so default values silently disappear from deserialized objects.
+</p>
+<p>
+    Quick fix adds <code>@JsonCreator</code> to the no-arg constructor. For Lombok
+    <code>@AllArgsConstructor</code>/<code>@NoArgsConstructor</code> pairs it adds
+    <code>onConstructor_ = @JsonCreator</code> to <code>@NoArgsConstructor</code>, unless that
+    annotation already sets <code>onConstructor</code>; alternatively drop the initializer or set
+    <code>spring.jackson.use-jackson2-defaults=true</code> while migrating.
+</p>
+</body>
+</html>

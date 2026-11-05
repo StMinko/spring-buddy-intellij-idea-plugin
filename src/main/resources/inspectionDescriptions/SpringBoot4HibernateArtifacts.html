@@ -1,0 +1,17 @@
+<html>
+<body>
+Reports build dependencies whose coordinates target Hibernate 6 or Jackson 2 while
+Spring Boot 4 runs Hibernate 7 and Jackson 3:
+<code>com.fasterxml.jackson.datatype:jackson-datatype-hibernate5</code>/<code>hibernate6</code>
+and <code>io.hypersistence:hypersistence-utils-hibernate-63</code>.
+<p>
+    Spring Boot 4 upgrades to Hibernate 7 and Jackson 3. The Hibernate Jackson module
+    moved to <code>tools.jackson.datatype:jackson-datatype-hibernate7</code> and the
+    hypersistence-utils artifact line follows the Hibernate major version
+    (<code>hypersistence-utils-hibernate-71</code>).
+</p>
+<p>
+    Quick fix renames the artifacts and the groupId in Maven and Gradle build files.
+</p>
+</body>
+</html>

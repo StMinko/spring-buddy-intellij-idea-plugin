@@ -1,8 +1,10 @@
 <html>
 <body>
 <h2>@Async with @TransactionalEventListener</h2>
-<p>Reports methods combining @Async and @TransactionalEventListener. The listener runs on a separate thread and can race
-    commit visibility or lazy persistence state. Remove @Async when ordering matters, or pass all required data in the
-    event and avoid database lookups.</p>
+<p>Reports methods combining @Async and @TransactionalEventListener(phase = BEFORE_COMMIT). The listener runs on a
+    separate thread while the publishing transaction is still open, so it can read data before the commit is visible.
+    Remove @Async when ordering matters, or pass all required data in the event and avoid database lookups.</p>
+<p>The default phase AFTER_COMMIT, and AFTER_ROLLBACK and AFTER_COMPLETION, are not reported: Spring submits the async
+    task only after the transaction has completed.</p>
 </body>
 </html>

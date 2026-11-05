@@ -1,0 +1,21 @@
+<html>
+<body>
+Reports an <code>IOException</code> catch whose <code>try</code> block calls into
+<code>com.fasterxml.jackson</code>.
+<p>
+    Jackson 3 made all mapper methods unchecked and removed the checked
+    <code>IOException</code>/<code>JsonProcessingException</code> throws, so the
+    <code>IOException</code> catch no longer covers the Jackson calls. Deserialization
+    failures surface as an unhandled <code>JacksonException</code> instead of being
+    handled by the catch block. Catch <code>tools.jackson.core.JacksonException</code>
+    (or widen to <code>Exception</code> when other checked calls share the block).
+</p>
+<p>
+    Quick fix rewrites the catch to <code>catch (IOException | JacksonException ex)</code>.
+    It is offered only when the catch block keeps compiling with the wider parameter type:
+    the parameter is only rethrown, used as the receiver of a <code>Throwable</code> method, or
+    passed where a <code>Throwable</code>, <code>Exception</code> or <code>Object</code> is
+    expected, and no other catch of the same <code>try</code> handles a Jackson exception.
+</p>
+</body>
+</html>

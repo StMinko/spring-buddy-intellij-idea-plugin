@@ -1,0 +1,20 @@
+<html>
+<body>
+Reports calls to the WebTestClient <code>jsonPath(String, Object...)</code> overload.
+<p>
+    In Spring Framework 6 this overload formatted the extra arguments into the
+    expression (<code>expression.formatted(args)</code>); it was deprecated and removed
+    in Spring Framework 7, so the call no longer compiles.
+</p>
+<p>
+    A Hamcrest matcher passed there, as in
+    <code>expectBody().jsonPath("$.name", Matchers.is(1))</code>, never asserted anything.
+    Quick fix rewrites that call to <code>jsonPath(expression).value(matcher)</code>.
+</p>
+<p>
+    Template arguments, as in <code>jsonPath("$.items[%s].name", index)</code>, are rewritten
+    to <code>jsonPath("$.items[%s].name".formatted(index))</code>, exactly what Spring 6
+    evaluated. The fix needs Java 15 or newer for <code>String.formatted()</code>.
+</p>
+</body>
+</html>

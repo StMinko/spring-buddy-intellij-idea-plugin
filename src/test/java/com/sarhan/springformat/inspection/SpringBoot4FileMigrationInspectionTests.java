@@ -434,6 +434,76 @@ public class SpringBoot4FileMigrationInspectionTests extends BasePlatformTestCas
                 .isZero();
     }
 
+    public void testHibernateArtifacts_reportsAndFixesJacksonDatatypeAndHypersistence() {
+        PsiFile pom = this.myFixture.addFileToProject("pom.xml", """
+                <project>
+                    <dependencies>
+                        <dependency>
+                            <groupId>com.fasterxml.jackson.datatype</groupId>
+                            <artifactId>jackson-datatype-hibernate5</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>io.hypersistence</groupId>
+                            <artifactId>hypersistence-utils-hibernate-63</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>tools.jackson.datatype</groupId>
+                            <artifactId>jackson-datatype-hibernate7</artifactId>
+                        </dependency>
+                    </dependencies>
+                </project>
+                """);
+
+        Assertions.assertThat(checkFile(new SpringBoot4FileMigrationInspection.HibernateArtifacts(), pom))
+                .as("old Hibernate 6/Jackson 2 coordinates flagged")
+                .isEqualTo(1);
+
+        applyFix(new SpringBoot4FileMigrationInspection.HibernateArtifacts(), pom);
+
+        Assertions.assertThat(pom.getText())
+                .as("artifact and coordinates migrated")
+                .contains("<artifactId>jackson-datatype-hibernate7</artifactId>")
+                .contains("<groupId>tools.jackson.datatype</groupId>")
+                .contains("hypersistence-utils-hibernate-71");
+    }
+
+    public void testHibernateArtifacts_fixesGradleNotation() {
+        PsiFile build = this.myFixture.addFileToProject("build.gradle", """
+                dependencies {
+                    implementation 'com.fasterxml.jackson.datatype:jackson-datatype-hibernate6'
+                    implementation 'io.hypersistence:hypersistence-utils-hibernate-63'
+                }
+                """);
+
+        applyFix(new SpringBoot4FileMigrationInspection.HibernateArtifacts(), build);
+
+        Assertions.assertThat(build.getText())
+                .as("gradle notation migrated")
+                .contains("'tools.jackson.datatype:jackson-datatype-hibernate7'")
+                .contains("'io.hypersistence:hypersistence-utils-hibernate-71'");
+    }
+
+    public void testHibernateArtifacts_silentOnAlreadyMigratedCoordinates() {
+        PsiFile pom = this.myFixture.addFileToProject("pom.xml", """
+                <project>
+                    <dependencies>
+                        <dependency>
+                            <groupId>tools.jackson.datatype</groupId>
+                            <artifactId>jackson-datatype-hibernate7</artifactId>
+                        </dependency>
+                        <dependency>
+                            <groupId>io.hypersistence</groupId>
+                            <artifactId>hypersistence-utils-hibernate-71</artifactId>
+                        </dependency>
+                    </dependencies>
+                </project>
+                """);
+
+        Assertions.assertThat(checkFile(new SpringBoot4FileMigrationInspection.HibernateArtifacts(), pom))
+                .as("already migrated coordinates are not flagged")
+                .isZero();
+    }
+
     private int checkFile(SpringBoot4FileMigrationInspection inspection, PsiFile file) {
         InspectionManager manager = InspectionManager.getInstance(getProject());
         ProblemDescriptor[] descriptors = inspection.checkFile(file, manager, true);

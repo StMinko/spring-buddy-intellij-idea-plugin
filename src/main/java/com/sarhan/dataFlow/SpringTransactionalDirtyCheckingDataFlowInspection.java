@@ -78,6 +78,9 @@ public class SpringTransactionalDirtyCheckingDataFlowInspection extends Abstract
 
                 // Pass 2: propagate aliases
                 tracker.propagateAliases(body);
+                if (passesTaintedEntityToWritableTransaction(body, tracker, method)) {
+                    return;
+                }
 
                 // Pass 3: detect mutations on tainted entities
                 Set<PsiElement> reported = new HashSet<>();
@@ -108,6 +111,33 @@ public class SpringTransactionalDirtyCheckingDataFlowInspection extends Abstract
                     found[0] = true;
                 }
                 super.visitMethodCallExpression(call);
+            }
+        });
+        return found[0];
+    }
+
+    // Handing the loaded entity to another bean's writable @Transactional method declares write intent.
+    private static boolean passesTaintedEntityToWritableTransaction(PsiCodeBlock body, TaintedEntityTracker tracker,
+            PsiMethod method) {
+        boolean[] found = {false};
+        body.accept(new JavaRecursiveElementVisitor() {
+            @Override
+            public void visitMethodCallExpression(@NotNull PsiMethodCallExpression call) {
+                super.visitMethodCallExpression(call);
+                PsiMethod target = call.resolveMethod();
+                if (found[0] || target == null || target.getContainingClass() == method.getContainingClass()) {
+                    return;
+                }
+                PsiAnnotation targetTx = findEffectiveTransactionalAnnotation(target);
+                if (targetTx == null || isReadOnly(targetTx)) {
+                    return;
+                }
+                for (PsiExpression argument : call.getArgumentList().getExpressions()) {
+                    if (tracker.isTaintedExpression(argument)) {
+                        found[0] = true;
+                        return;
+                    }
+                }
             }
         });
         return found[0];

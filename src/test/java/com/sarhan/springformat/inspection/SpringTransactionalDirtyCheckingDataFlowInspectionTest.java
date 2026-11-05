@@ -389,6 +389,50 @@ public class SpringTransactionalDirtyCheckingDataFlowInspectionTest extends Base
         this.myFixture.checkHighlighting(false, false, true, true);
     }
 
+    public void testDoesNotReportWhenMutatedEntityIsPassedToWritableTransactionalBean() {
+        this.myFixture.enableInspections(new SpringTransactionalDirtyCheckingDataFlowInspection());
+        this.myFixture.configureByText("UserService.java", """
+                class UserService {
+                    UserRepository userRepository;
+                    HistoryService historyService;
+
+                    @Transactional
+                    void archive(Long id) {
+                        User user = userRepository.findById(id);
+                        user.setName("archived");
+                        historyService.record(user);
+                    }
+                }
+                @Transactional
+                class HistoryService { void record(User user) { } }
+                class User { void setName(String name) { } }
+                interface UserRepository { User findById(Long id); }
+                """);
+        assertNoDirtyCheckingProblem();
+    }
+
+    public void testReportsWhenMutatedEntityIsPassedToReadOnlyTransactionalBean() {
+        this.myFixture.enableInspections(new SpringTransactionalDirtyCheckingDataFlowInspection());
+        this.myFixture.configureByText("UserService.java", """
+                class UserService {
+                    UserRepository userRepository;
+                    PriceService priceService;
+
+                    @Transactional
+                    long <warning descr="@Transactional method loads and mutates an entity without readOnly=true; dirty checking may persist temporary changes">quote</warning>(Long id) {
+                        User user = userRepository.findById(id);
+                        user.setName("temporary");
+                        return priceService.price(user);
+                    }
+                }
+                @Transactional(readOnly = true)
+                class PriceService { long price(User user) { return 0; } }
+                class User { void setName(String name) { } }
+                interface UserRepository { User findById(Long id); }
+                """);
+        this.myFixture.checkHighlighting(false, false, true, true);
+    }
+
     private void assertNoDirtyCheckingProblem() {
         assertTrue(this.myFixture.doHighlighting().stream()
                 .noneMatch(info -> info.getDescription() != null

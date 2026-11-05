@@ -757,6 +757,15 @@ public class SpringTransactionalPrivateMethodInspectionTest extends BasePlatform
         this.myFixture.checkHighlighting(false, false, true, true);
     }
 
+    public void testDoesNotReportReadOnlyRepositoryTransaction() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.RepositoryTransaction());
+        this.myFixture.configureByText("UserRepository.java", """
+                @Transactional(readOnly = true)
+                interface UserRepository { }
+                """);
+        assertNoProblem("Repository-level @Transactional");
+    }
+
     public void testReportsWeakIsolation() {
         this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.WeakIsolation());
         this.myFixture.configureByText("Sample.java", """
@@ -931,28 +940,31 @@ public class SpringTransactionalPrivateMethodInspectionTest extends BasePlatform
         this.myFixture.checkHighlighting(false, false, true, true);
     }
 
-    public void testReportsAndFixesAsyncTransactionalEventListener() {
+    public void testReportsAsyncTransactionalEventListenerBeforeCommit() {
         this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.AsyncTransactionalEventListener());
         this.myFixture.configureByText("Sample.java", """
                 class EventPitfallService {
                     @Async
-                    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+                    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
                     public void <warning descr="Potential data race: @Async with @TransactionalEventListener may read data before commit is fully visible"><caret>handleEvent</warning>(Object event) { }
                 }
                 """);
         this.myFixture.checkHighlighting(false, false, true, true);
     }
 
-    public void testReportsAsyncTransactionalEventListenerWithoutPhaseAttribute() {
+    public void testDoesNotReportAsyncTransactionalEventListenerAfterCommit() {
         this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.AsyncTransactionalEventListener());
         this.myFixture.configureByText("Sample.java", """
                 class EventPitfallService {
                     @Async
+                    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+                    public void handleEvent(Object event) { }
+                    @Async
                     @TransactionalEventListener
-                    public void <warning descr="Potential data race: @Async with @TransactionalEventListener may read data before commit is fully visible"><caret>handlePartnerRelChangedEvent</warning>(Object event) { }
+                    public void handlePartnerRelChangedEvent(Object event) { }
                 }
                 """);
-        this.myFixture.checkHighlighting(false, false, true, true);
+        assertNoProblem("Potential data race");
     }
 
     public void testDoesNotReportSelfInvocationWithMatchingTransactionSemantics() {
@@ -1043,5 +1055,9 @@ public class SpringTransactionalPrivateMethodInspectionTest extends BasePlatform
                 }
                 """);
         this.myFixture.checkHighlighting(false, false, true, true);
+    }
+    private void assertNoProblem(String descriptionPrefix) {
+        Assertions.assertThat(this.myFixture.doHighlighting())
+                .noneMatch(info -> info.getDescription() != null && info.getDescription().startsWith(descriptionPrefix));
     }
 }

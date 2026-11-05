@@ -4,5 +4,7 @@
 <p>Reports @Transactional on repository classes or interfaces. Repository-level transactions are usually too
     fine-grained for business units of work and can fragment atomicity across multiple repository calls. Define
     transactions at the service layer.</p>
+<p>@Transactional(readOnly = true) on a repository is not reported. Spring Data JPA recommends this pattern for declared
+    query methods, and a service-layer transaction still overrides it.</p>
 </body>
 </html>

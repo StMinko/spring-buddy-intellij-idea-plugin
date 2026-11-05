@@ -17,6 +17,7 @@
 package com.sarhan.springformat.inspection;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -28,6 +29,7 @@ import com.intellij.codeInspection.LocalQuickFix;
 import com.intellij.codeInspection.ProblemHighlightType;
 import com.intellij.codeInspection.ProblemsHolder;
 import com.intellij.openapi.project.Project;
+import com.intellij.pom.java.LanguageLevel;
 import com.intellij.lang.java.JavaLanguage;
 import com.intellij.psi.JavaElementVisitor;
 import com.intellij.psi.JavaPsiFacade;
@@ -50,13 +52,18 @@ import com.intellij.psi.PsiJavaFile;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
+import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiNameValuePair;
 import com.intellij.psi.PsiParameter;
+import com.intellij.psi.PsiParenthesizedExpression;
 import com.intellij.psi.PsiReferenceExpression;
+import com.intellij.psi.PsiTryStatement;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.codeStyle.JavaCodeStyleManager;
 import com.intellij.psi.util.InheritanceUtil;
 import com.intellij.psi.util.PsiTreeUtil;
+import com.intellij.psi.util.PsiUtil;
+import com.sarhan.lombok.LombokAnnotationUtil;
 import com.sarhan.springformat.settings.SpringBootVersionResolver;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -77,12 +84,36 @@ public class SpringBoot4MigrationInspection extends AbstractBaseJavaLocalInspect
      */
     private static final Map<String, String> JACKSON_RENAMED_TYPES = Map.ofEntries(
             Map.entry("com.fasterxml.jackson.core.JsonProcessingException", "tools.jackson.core.JacksonException"),
+            Map.entry("com.fasterxml.jackson.core.JsonGenerationException", "tools.jackson.core.exc.StreamWriteException"),
+            Map.entry("com.fasterxml.jackson.core.JsonParseException", "tools.jackson.core.exc.StreamReadException"),
+            Map.entry("com.fasterxml.jackson.core.JsonLocation", "tools.jackson.core.TokenStreamLocation"),
+            Map.entry("com.fasterxml.jackson.core.JsonStreamContext", "tools.jackson.core.TokenStreamContext"),
+            Map.entry("com.fasterxml.jackson.core.JsonFactory", "tools.jackson.core.json.JsonFactory"),
+            Map.entry("com.fasterxml.jackson.core.JsonFactoryBuilder", "tools.jackson.core.json.JsonFactoryBuilder"),
             Map.entry("com.fasterxml.jackson.databind.JsonMappingException", "tools.jackson.databind.DatabindException"),
+            Map.entry("com.fasterxml.jackson.databind.RuntimeJsonMappingException", "tools.jackson.databind.DatabindException"),
             Map.entry("com.fasterxml.jackson.databind.JsonSerializer", "tools.jackson.databind.ValueSerializer"),
             Map.entry("com.fasterxml.jackson.databind.JsonDeserializer", "tools.jackson.databind.ValueDeserializer"),
             Map.entry("com.fasterxml.jackson.databind.SerializerProvider", "tools.jackson.databind.SerializationContext"),
+            Map.entry("com.fasterxml.jackson.databind.Module", "tools.jackson.databind.JacksonModule"),
+            Map.entry("com.fasterxml.jackson.databind.JsonSerializable", "tools.jackson.databind.JacksonSerializable"),
+            Map.entry("com.fasterxml.jackson.databind.ser.BeanSerializerModifier",
+                    "tools.jackson.databind.ser.ValueSerializerModifier"),
+            Map.entry("com.fasterxml.jackson.databind.deser.BeanDeserializerModifier",
+                    "tools.jackson.databind.deser.ValueDeserializerModifier"),
+            Map.entry("com.fasterxml.jackson.databind.ser.impl.SimpleBeanPropertyFilter",
+                    "tools.jackson.databind.ser.std.SimpleBeanPropertyFilter"),
+            Map.entry("com.fasterxml.jackson.databind.ser.impl.SimpleFilterProvider",
+                    "tools.jackson.databind.ser.std.SimpleFilterProvider"),
             Map.entry("com.fasterxml.jackson.databind.DeserializationContext",
                     "tools.jackson.databind.DeserializationContext"));
+
+    /**
+     * Jackson 2 types that have no direct Jackson 3 counterpart; reported
+     * without a quick fix.
+     */
+    private static final Set<String> JACKSON_REMOVED_TYPES = Set.of(
+            "com.fasterxml.jackson.core.ObjectCodec");
 
     /**
      * Spring Boot 4 Jackson integration renames (verified against the
@@ -135,7 +166,27 @@ public class SpringBoot4MigrationInspection extends AbstractBaseJavaLocalInspect
             Map.entry("org.springframework.boot.DefaultBootstrapContext",
                     "org.springframework.boot.bootstrap.DefaultBootstrapContext"),
             Map.entry("org.springframework.boot.env.EnvironmentPostProcessor",
-                    "org.springframework.boot.EnvironmentPostProcessor"));
+                    "org.springframework.boot.EnvironmentPostProcessor"),
+            Map.entry("org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration",
+                    "org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration"),
+            Map.entry("org.springframework.boot.autoconfigure.orm.jpa.JpaBaseConfiguration",
+                    "org.springframework.boot.jpa.autoconfigure.JpaBaseConfiguration"),
+            Map.entry("org.springframework.boot.autoconfigure.orm.jpa.EntityManagerFactoryBuilderCustomizer",
+                    "org.springframework.boot.jpa.autoconfigure.EntityManagerFactoryBuilderCustomizer"),
+            Map.entry("org.springframework.boot.autoconfigure.orm.jpa.HibernatePropertiesCustomizer",
+                    "org.springframework.boot.hibernate.autoconfigure.HibernatePropertiesCustomizer"),
+            Map.entry("org.springframework.boot.test.autoconfigure.orm.jpa.AutoConfigureDataJpa",
+                    "org.springframework.boot.data.jpa.test.autoconfigure.AutoConfigureDataJpa"),
+            Map.entry("org.springframework.boot.test.autoconfigure.orm.jpa.AutoConfigureTestEntityManager",
+                    "org.springframework.boot.jpa.test.autoconfigure.AutoConfigureTestEntityManager"),
+            Map.entry("org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager",
+                    "org.springframework.boot.jpa.test.autoconfigure.TestEntityManager"),
+            Map.entry("org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase",
+                    "org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase"),
+            Map.entry("org.springframework.boot.test.autoconfigure.web.reactive.AutoConfigureWebTestClient",
+                    "org.springframework.boot.webtestclient.autoconfigure.AutoConfigureWebTestClient"),
+            Map.entry("org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration",
+                    "org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration"));
 
     /**
      * Relocated types whose old location still exists (deprecated) in Boot 4;
@@ -149,7 +200,11 @@ public class SpringBoot4MigrationInspection extends AbstractBaseJavaLocalInspect
             "org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest",
             "org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest",
             "org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc",
-            "org.springframework.boot.test.autoconfigure.properties.PropertyMapping");
+            "org.springframework.boot.test.autoconfigure.properties.PropertyMapping",
+            "org.springframework.boot.test.autoconfigure.orm.jpa.AutoConfigureDataJpa",
+            "org.springframework.boot.test.autoconfigure.orm.jpa.AutoConfigureTestEntityManager",
+            "org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase",
+            "org.springframework.boot.test.autoconfigure.web.reactive.AutoConfigureWebTestClient");
 
     private static final String AUTO_CONFIGURE_MOCK_MVC =
             "org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc";
@@ -178,6 +233,15 @@ public class SpringBoot4MigrationInspection extends AbstractBaseJavaLocalInspect
 
     private static final String AUTO_CONFIGURE_TEST_REST_TEMPLATE =
             "org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate";
+
+    private static final String AUTO_CONFIGURE_WEB_TEST_CLIENT =
+            "org.springframework.boot.webtestclient.autoconfigure.AutoConfigureWebTestClient";
+
+    private static final String WEB_TEST_CLIENT = "org.springframework.test.web.reactive.server.WebTestClient";
+
+    private static final Set<String> AUTO_CONFIGURE_WEB_TEST_CLIENT_FQNS = Set.of(
+            "org.springframework.boot.webtestclient.autoconfigure.AutoConfigureWebTestClient",
+            "org.springframework.boot.test.autoconfigure.web.reactive.AutoConfigureWebTestClient");
 
     private static final String EXTEND_WITH = "org.junit.jupiter.api.extension.ExtendWith";
 
@@ -225,6 +289,115 @@ public class SpringBoot4MigrationInspection extends AbstractBaseJavaLocalInspect
      */
     private static final List<String> JACKSON_MODULE_PREFIXES = List.of(
             "com.fasterxml.jackson.datatype.", "com.fasterxml.jackson.module.");
+
+    private enum JacksonFixKind {
+        RENAME, FOR_TYPE_READER, ITERATE
+    }
+
+    private record JacksonMethodFix(JacksonFixKind kind, String newName) {
+    }
+
+    /**
+     * Jackson 3 method renames verified against the Jackson 3 jars. The outer key
+     * is the Jackson 2 owner type, the inner key the old method name.
+     */
+    private static final Map<String, Map<String, JacksonMethodFix>> JACKSON_METHOD_RENAMES;
+
+    /**
+     * Jackson 3 removed methods that moved behind the builder API; reported
+     * without a quick fix because the replacement restructures the mapper setup.
+     */
+    private static final Map<String, Set<String>> JACKSON_METHOD_REMOVALS;
+
+    private static final Map<String, String> JACKSON_REMOVAL_GUIDANCE = Map.of(
+            "com.fasterxml.jackson.databind.ObjectMapper",
+            "configure the mapper through JsonMapper.builder()",
+            "com.fasterxml.jackson.core.JsonGenerator",
+            "generator feature control moved to ObjectWriteContext",
+            "com.fasterxml.jackson.core.JsonParser",
+            "parser feature control moved to ObjectReadContext");
+
+    /**
+     * All method names known to the Jackson API tables; a cheap pre-filter
+     * before any PSI resolution happens.
+     */
+    private static final Set<String> JACKSON_API_METHOD_NAMES;
+
+    static {
+        Map<String, Map<String, JacksonMethodFix>> renames = new HashMap<>();
+        renames.put("com.fasterxml.jackson.core.JsonGenerator", Map.ofEntries(
+                Map.entry("writeFieldName", new JacksonMethodFix(JacksonFixKind.RENAME, "writeName")),
+                Map.entry("writeObjectField", new JacksonMethodFix(JacksonFixKind.RENAME, "writePOJOProperty")),
+                Map.entry("writeObjectFieldStart",
+                        new JacksonMethodFix(JacksonFixKind.RENAME, "writeObjectPropertyStart")),
+                Map.entry("writeArrayFieldStart",
+                        new JacksonMethodFix(JacksonFixKind.RENAME, "writeArrayPropertyStart")),
+                Map.entry("writeStringField", new JacksonMethodFix(JacksonFixKind.RENAME, "writeStringProperty")),
+                Map.entry("writeNumberField", new JacksonMethodFix(JacksonFixKind.RENAME, "writeNumberProperty")),
+                Map.entry("writeBooleanField", new JacksonMethodFix(JacksonFixKind.RENAME, "writeBooleanProperty")),
+                Map.entry("writeNullField", new JacksonMethodFix(JacksonFixKind.RENAME, "writeNullProperty")),
+                Map.entry("writeBinaryField", new JacksonMethodFix(JacksonFixKind.RENAME, "writeBinaryProperty")),
+                Map.entry("writeObject", new JacksonMethodFix(JacksonFixKind.RENAME, "writePOJO")),
+                Map.entry("getOutputContext",
+                        new JacksonMethodFix(JacksonFixKind.RENAME, "streamWriteContext")),
+                Map.entry("getCurrentValue", new JacksonMethodFix(JacksonFixKind.RENAME, "currentValue")),
+                Map.entry("setCurrentValue", new JacksonMethodFix(JacksonFixKind.RENAME, "assignCurrentValue"))));
+        renames.put("com.fasterxml.jackson.core.JsonParser", Map.ofEntries(
+                Map.entry("getCurrentToken", new JacksonMethodFix(JacksonFixKind.RENAME, "currentToken")),
+                Map.entry("getCurrentTokenId", new JacksonMethodFix(JacksonFixKind.RENAME, "currentTokenId")),
+                Map.entry("getCurrentName", new JacksonMethodFix(JacksonFixKind.RENAME, "currentName")),
+                Map.entry("getCurrentLocation", new JacksonMethodFix(JacksonFixKind.RENAME, "currentLocation")),
+                Map.entry("getTokenLocation", new JacksonMethodFix(JacksonFixKind.RENAME, "currentTokenLocation")),
+                Map.entry("getCurrentValue", new JacksonMethodFix(JacksonFixKind.RENAME, "currentValue")),
+                Map.entry("setCurrentValue", new JacksonMethodFix(JacksonFixKind.RENAME, "assignCurrentValue")),
+                Map.entry("getParsingContext", new JacksonMethodFix(JacksonFixKind.RENAME, "streamReadContext")),
+                Map.entry("nextFieldName", new JacksonMethodFix(JacksonFixKind.RENAME, "nextName"))));
+        renames.put("com.fasterxml.jackson.databind.ObjectReader", Map.ofEntries(
+                Map.entry("withType", new JacksonMethodFix(JacksonFixKind.RENAME, "forType")),
+                Map.entry("readValue", new JacksonMethodFix(JacksonFixKind.FOR_TYPE_READER, null))));
+        renames.put("com.fasterxml.jackson.databind.ObjectWriter", Map.ofEntries(
+                Map.entry("withType", new JacksonMethodFix(JacksonFixKind.RENAME, "forType"))));
+        renames.put("com.fasterxml.jackson.databind.JsonNode", Map.ofEntries(
+                Map.entry("with", new JacksonMethodFix(JacksonFixKind.RENAME, "withObject")),
+                Map.entry("fieldNames", new JacksonMethodFix(JacksonFixKind.RENAME, "propertyNames")),
+                Map.entry("fields", new JacksonMethodFix(JacksonFixKind.ITERATE, "properties")),
+                Map.entry("elements", new JacksonMethodFix(JacksonFixKind.ITERATE, "values")),
+                Map.entry("isContainerNode", new JacksonMethodFix(JacksonFixKind.RENAME, "isContainer")),
+                Map.entry("findValuesAsText", new JacksonMethodFix(JacksonFixKind.RENAME, "findValuesAsString"))));
+        renames.put("com.fasterxml.jackson.databind.ObjectMapper", Map.ofEntries(
+                Map.entry("writerWithType", new JacksonMethodFix(JacksonFixKind.RENAME, "writerFor")),
+                Map.entry("getSerializationConfig",
+                        new JacksonMethodFix(JacksonFixKind.RENAME, "serializationConfig")),
+                Map.entry("getDeserializationConfig",
+                        new JacksonMethodFix(JacksonFixKind.RENAME, "deserializationConfig"))));
+        JACKSON_METHOD_RENAMES = Map.copyOf(renames);
+
+        Map<String, Set<String>> removals = new HashMap<>();
+        removals.put("com.fasterxml.jackson.core.JsonGenerator", Set.of(
+                "getCodec", "setCodec", "setPrettyPrinter", "useDefaultPrettyPrinter", "enable", "disable",
+                "setFeatureMask", "getFeatureMask"));
+        removals.put("com.fasterxml.jackson.core.JsonParser", Set.of(
+                "getCodec", "setCodec", "enable", "disable", "configure", "setFeatureMask", "getFeatureMask",
+                "readValuesAs"));
+        removals.put("com.fasterxml.jackson.databind.ObjectMapper", Set.of(
+                "registerModule", "registerModules", "findAndRegisterModules", "setConfig",
+                "setSerializationInclusion", "setPropertyInclusion",
+                "setDefaultPropertyInclusion", "setDateFormat", "setTimeZone", "setLocale", "setVisibility",
+                "addMixIn", "setMixIns", "setFilterProvider", "enable", "disable", "configure", "copy",
+                "setTypeFactory", "setNodeFactory", "registerSubtypes", "canSerialize", "canDeserialize",
+                "generateJsonSchema"));
+        JACKSON_METHOD_REMOVALS = Map.copyOf(removals);
+
+        Set<String> names = new HashSet<>();
+        for (Map<String, JacksonMethodFix> methods : renames.values()) {
+            names.addAll(methods.keySet());
+        }
+        for (Set<String> methods : removals.values()) {
+            names.addAll(methods);
+        }
+        JACKSON_API_METHOD_NAMES = Set.copyOf(names);
+    }
+
 
     private static final Set<String> REMOVED_LISTENABLE_TYPES = Set.of(
             "org.springframework.util.concurrent.ListenableFuture",
@@ -332,6 +505,18 @@ public class SpringBoot4MigrationInspection extends AbstractBaseJavaLocalInspect
             }
 
             @Override
+            public void visitClass(@NotNull PsiClass psiClass) {
+                super.visitClass(psiClass);
+                SpringBoot4MigrationInspection.this.visitClassDeclaration(psiClass, holder);
+            }
+
+            @Override
+            public void visitCatchSection(@NotNull com.intellij.psi.PsiCatchSection section) {
+                super.visitCatchSection(section);
+                SpringBoot4MigrationInspection.this.visitCatchDeclaration(section, holder);
+            }
+
+            @Override
             public void visitMethod(@NotNull PsiMethod method) {
                 super.visitMethod(method);
                 SpringBoot4MigrationInspection.this.visitMethodDeclaration(method, holder);
@@ -361,6 +546,10 @@ public class SpringBoot4MigrationInspection extends AbstractBaseJavaLocalInspect
         if (this.kind == Kind.JACKSON_RENAMED_TYPE && JACKSON_RENAMED_TYPES.containsKey(fqn)) {
             holder.registerProblem(statement, "Jackson type was renamed in Jackson 3 (Spring Boot 4)",
                     new ReplaceTextFix("Replace with Jackson 3 type", fqn, JACKSON_RENAMED_TYPES.get(fqn)));
+        }
+        if (this.kind == Kind.JACKSON_RENAMED_TYPE && JACKSON_REMOVED_TYPES.contains(fqn)) {
+            holder.registerProblem(statement, "Jackson type was removed in Jackson 3 (Spring Boot 4);"
+                    + " use the mapper or ObjectReadContext directly instead of ObjectCodec");
         }
         if (this.kind == Kind.BOOT_JACKSON_API && BOOT_JACKSON_RENAMES.containsKey(fqn)) {
             holder.registerProblem(statement, "Spring Boot Jackson integration API was renamed in Spring Boot 4",
@@ -415,6 +604,10 @@ public class SpringBoot4MigrationInspection extends AbstractBaseJavaLocalInspect
         if (this.kind == Kind.JACKSON_RENAMED_TYPE && JACKSON_RENAMED_TYPES.containsKey(text)) {
             holder.registerProblem(reference, "Jackson type was renamed in Jackson 3 (Spring Boot 4)",
                     new ReplaceTextFix("Replace with Jackson 3 type", text, JACKSON_RENAMED_TYPES.get(text)));
+        }
+        if (this.kind == Kind.JACKSON_RENAMED_TYPE && JACKSON_REMOVED_TYPES.contains(text)) {
+            holder.registerProblem(reference, "Jackson type was removed in Jackson 3 (Spring Boot 4);"
+                    + " use the mapper or ObjectReadContext directly instead of ObjectCodec");
         }
         if (this.kind == Kind.BOOT_JACKSON_API && BOOT_JACKSON_RENAMES.containsKey(text)) {
             holder.registerProblem(reference, "Spring Boot Jackson integration API was renamed in Spring Boot 4",
@@ -612,6 +805,12 @@ public class SpringBoot4MigrationInspection extends AbstractBaseJavaLocalInspect
     }
 
     private void visitMethodCall(PsiMethodCallExpression expression, ProblemsHolder holder) {
+        if (this.kind == Kind.JACKSON_API) {
+            visitJacksonApiCall(expression, holder);
+        }
+        if (this.kind == Kind.JSON_PATH_MATCHER) {
+            visitJsonPathMatcherCall(expression, holder);
+        }
         if (this.kind == Kind.PROPERTY_MAPPER_ALWAYS_APPLYING && isAlwaysApplyingWhenNonNull(expression)) {
             holder.registerProblem(expression, "PropertyMapper.alwaysApplyingWhenNonNull() was removed in Spring Boot 4;"
                     + " null values are now skipped by default (use always() to map nulls)");
@@ -649,6 +848,481 @@ public class SpringBoot4MigrationInspection extends AbstractBaseJavaLocalInspect
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
+
+    private static final String JACKSON_API_OWNER_JAVA_LANG_CLASS = "java.lang.Class";
+
+    private static final Set<String> JACKSON_TYPE_REFERENCE_TYPES = Set.of(
+            "com.fasterxml.jackson.core.type.TypeReference", "tools.jackson.core.type.TypeReference",
+            "com.fasterxml.jackson.databind.JavaType", "tools.jackson.databind.JavaType");
+
+    private static final Set<String> JACKSON_PARSER_TYPES = Set.of(
+            "com.fasterxml.jackson.core.JsonParser", "tools.jackson.core.JsonParser");
+
+    /**
+     * Jackson 2 methods that were renamed or moved in Jackson 3. The owner type is
+     * resolved from the call or from the statically typed qualifier, so unrelated
+     * same-name methods never match.
+     */
+    private void visitJacksonApiCall(PsiMethodCallExpression expression, ProblemsHolder holder) {
+        String name = expression.getMethodExpression().getReferenceName();
+        if (name == null || !JACKSON_API_METHOD_NAMES.contains(name)) {
+            return;
+        }
+        String owner = jacksonOwnerQualifiedName(expression);
+        if (owner == null) {
+            return;
+        }
+        Map<String, JacksonMethodFix> renames = JACKSON_METHOD_RENAMES.get(owner);
+        if (renames != null && renames.containsKey(name)) {
+            JacksonMethodFix fix = renames.get(name);
+            if (!rewritePossible(expression, fix)) {
+                return;
+            }
+            String message = switch (fix.kind()) {
+                case RENAME -> "Jackson 3 renamed " + name + "() to " + fix.newName() + "()";
+                case FOR_TYPE_READER -> "Jackson 3 ObjectReader binds the target type through forType();"
+                        + " use forType(type).readValue(value)";
+                case ITERATE -> "Jackson 3 renamed " + name + "() to " + fix.newName() + "().iterator()";
+            };
+            holder.registerProblem(expression, message, new ReplaceCallFix("Replace with Jackson 3 call",
+                    expression.getText(), rebuiltCallText(expression, fix)));
+            return;
+        }
+        Set<String> removed = JACKSON_METHOD_REMOVALS.get(owner);
+        if (removed != null && removed.contains(name)) {
+            String guidance = JACKSON_REMOVAL_GUIDANCE.getOrDefault(owner, "restructure against the Jackson 3 API");
+            holder.registerProblem(expression, "Jackson 3 removed " + shortName(owner) + "." + name + "(); "
+                    + guidance);
+        }
+    }
+
+    /**
+     * Jackson 3 binds through the public all-args constructor when parameter names
+     * are compiled in (-parameters), which bypasses field initializers that the
+     * Jackson 2 no-arg path applied.
+     */
+    private static final String JSON_CREATOR = "com.fasterxml.jackson.annotation.JsonCreator";
+
+    private static final String JSON_IGNORE = "com.fasterxml.jackson.annotation.JsonIgnore";
+
+    private static final String LOMBOK_NO_ARGS_CONSTRUCTOR = "lombok.NoArgsConstructor";
+
+    private static final String JACKSON_CONSTRUCTOR_MESSAGE = "Jackson 3 binds this all-args constructor when"
+            + " parameter names are compiled in (-parameters), so field initializers are bypassed;"
+            + " mark the no-arg constructor @JsonCreator to keep them"
+            + " (or set spring.jackson.use-jackson2-defaults=true)";
+
+    private void visitClassDeclaration(PsiClass psiClass, ProblemsHolder holder) {
+        if (this.kind != Kind.JACKSON_CONSTRUCTOR) {
+            return;
+        }
+        if (psiClass.isInterface() || psiClass.isEnum() || psiClass.isAnnotationType() || psiClass.isRecord()) {
+            return;
+        }
+        List<PsiField> initializedFields = initializedInstanceFields(psiClass);
+        if (initializedFields.isEmpty()) {
+            return;
+        }
+        boolean lombokPair = LombokAnnotationUtil.hasAllArgsConstructor(psiClass)
+                && LombokAnnotationUtil.hasNoArgsConstructor(psiClass);
+        if (lombokPair) {
+            String message = "Jackson 3 binds the Lombok all-args constructor when"
+                    + " parameter names are compiled in (-parameters), so field initializers are bypassed;"
+                    + " either drop the initializer or set spring.jackson.use-jackson2-defaults=true";
+            PsiAnnotation noArgs = LombokAnnotationUtil.findAnnotation(psiClass, LOMBOK_NO_ARGS_CONSTRUCTOR,
+                    "NoArgsConstructor");
+            if (noArgs != null && noArgs.findDeclaredAttributeValue("onConstructor") == null
+                    && noArgs.findDeclaredAttributeValue("onConstructor_") == null) {
+                holder.registerProblem(anchorOf(psiClass), message, new AddLombokJsonCreatorFix());
+            }
+            else {
+                holder.registerProblem(anchorOf(psiClass), message);
+            }
+            return;
+        }
+        PsiMethod noArg = findNoArgConstructor(psiClass);
+        PsiMethod multiArg = singlePublicMultiArgConstructor(psiClass);
+        if (noArg == null || multiArg == null || !constructorCoversInitializedField(multiArg, initializedFields)
+                || SpringInspectionUtil.hasAnnotation(multiArg.getModifierList(), JSON_CREATOR, "JsonCreator")
+                || SpringInspectionUtil.hasAnnotation(multiArg.getModifierList(), JSON_IGNORE, "JsonIgnore")
+                || SpringInspectionUtil.hasAnnotation(noArg.getModifierList(), JSON_CREATOR, "JsonCreator")) {
+            return;
+        }
+        holder.registerProblem(anchorOf(multiArg), JACKSON_CONSTRUCTOR_MESSAGE,
+                new AddJsonCreatorFix("Add @JsonCreator to the no-arg constructor"));
+    }
+
+    /**
+     * The name identifier of the element the problem is anchored to.
+     */
+    private static PsiElement anchorOf(PsiClass psiClass) {
+        return (psiClass.getNameIdentifier() != null) ? psiClass.getNameIdentifier() : psiClass;
+    }
+
+    private static PsiElement anchorOf(PsiMethod method) {
+        return (method.getNameIdentifier() != null) ? method.getNameIdentifier() : method;
+    }
+
+    /**
+     * Instance fields that carry a field initializer; Jackson 3's constructor
+     * selection bypasses exactly these values.
+     */
+    private static List<PsiField> initializedInstanceFields(PsiClass psiClass) {
+        List<PsiField> initialized = new ArrayList<>();
+        for (PsiField field : psiClass.getFields()) {
+            if (field.hasInitializer() && !field.hasModifierProperty(PsiModifier.STATIC)) {
+                initialized.add(field);
+            }
+        }
+        return initialized;
+    }
+
+    /**
+     * A single public constructor with parameters; two such constructors leave the
+     * choice ambiguous to Jackson and the no-arg constructor wins there.
+     */
+    private static PsiMethod singlePublicMultiArgConstructor(PsiClass psiClass) {
+        PsiMethod found = null;
+        for (PsiMethod constructor : psiClass.getConstructors()) {
+            if (constructor.getParameterList().getParameters().length == 0
+                    || !constructor.hasModifierProperty(PsiModifier.PUBLIC)) {
+                continue;
+            }
+            if (found != null) {
+                return null;
+            }
+            found = constructor;
+        }
+        return found;
+    }
+
+    private static PsiMethod findNoArgConstructor(PsiClass psiClass) {
+        for (PsiMethod constructor : psiClass.getConstructors()) {
+            if (constructor.getParameterList().getParameters().length == 0) {
+                return constructor;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Whether one of the constructor parameters is named after an initialized
+     * field; only those fields lose their initializer when the constructor is
+     * selected.
+     */
+    private static boolean constructorCoversInitializedField(PsiMethod constructor, List<PsiField> initializedFields) {
+        for (PsiParameter parameter : constructor.getParameterList().getParameters()) {
+            for (PsiField field : initializedFields) {
+                if (field.getName().equals(parameter.getName())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void visitCatchDeclaration(com.intellij.psi.PsiCatchSection section, ProblemsHolder holder) {
+        if (this.kind != Kind.JACKSON_IO_EXCEPTION) {
+            return;
+        }
+        PsiParameter parameter = section.getParameter();
+        if (parameter == null || !isIoException(parameter)) {
+            return;
+        }
+        com.intellij.psi.PsiTryStatement tryStatement = PsiTreeUtil.getParentOfType(section, PsiTryStatement.class,
+                false);
+        if (tryStatement == null || !tryContainsJacksonCall(tryStatement)) {
+            return;
+        }
+        String message = "Jackson 3 methods throw the unchecked JacksonException;"
+                + " this IOException catch no longer covers them";
+        if (multiCatchKeepsCompiling(section, parameter)) {
+            holder.registerProblem(parameter, message, new AddJacksonExceptionCatchFix());
+        }
+        else {
+            holder.registerProblem(parameter, message);
+        }
+    }
+
+    private static final String JACKSON_EXCEPTION = "tools.jackson.core.JacksonException";
+
+    /**
+     * Exception types that are, or migrate to, JacksonException; a sibling catch of
+     * one of them would clash with the widened multi-catch.
+     */
+    private static final Set<String> JACKSON_EXCEPTION_TYPES = Set.of(JACKSON_EXCEPTION,
+            "com.fasterxml.jackson.core.JacksonException", "com.fasterxml.jackson.core.JsonProcessingException");
+
+    /**
+     * An earlier catch of one of these already handles JacksonException, so the
+     * widened multi-catch would not compile.
+     */
+    private static final Set<String> JACKSON_EXCEPTION_SUPERTYPES = Set.of(
+            "java.lang.RuntimeException", "java.lang.Exception", "java.lang.Throwable");
+
+    private static final Set<String> THROWABLE_MEMBER_OWNERS = Set.of("java.lang.Throwable", "java.lang.Object");
+
+    private static final Set<String> THROWABLE_PARAMETER_TYPES = Set.of(
+            "java.lang.Throwable", "java.lang.Exception", "java.lang.Object");
+
+    /**
+     * Whether widening the catch to {@code IOException | JacksonException} keeps
+     * the catch block compiling: the multi-catch parameter is typed as the least
+     * upper bound (Exception), so every use must already accept that type.
+     */
+    private static boolean multiCatchKeepsCompiling(com.intellij.psi.PsiCatchSection section,
+            PsiParameter parameter) {
+        if (parameter.getType() instanceof com.intellij.psi.PsiDisjunctionType || section.getCatchBlock() == null
+                || catchesJacksonExceptionElsewhere(section)) {
+            return false;
+        }
+        for (com.intellij.psi.PsiReference reference : com.intellij.psi.search.searches.ReferencesSearch
+                .search(parameter, new com.intellij.psi.search.LocalSearchScope(section.getCatchBlock()))
+                .findAll()) {
+            if (!(reference.getElement() instanceof PsiReferenceExpression usage) || !isExceptionSafeUsage(usage)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Another catch of the same try already handling a Jackson exception would
+     * clash with the widened multi-catch once the Jackson types migrate.
+     */
+    private static boolean catchesJacksonExceptionElsewhere(com.intellij.psi.PsiCatchSection section) {
+        PsiTryStatement tryStatement = section.getTryStatement();
+        boolean preceding = true;
+        for (com.intellij.psi.PsiCatchSection other : tryStatement.getCatchSections()) {
+            if (other == section) {
+                preceding = false;
+                continue;
+            }
+            PsiType type = other.getCatchType();
+            List<PsiType> alternatives = (type instanceof com.intellij.psi.PsiDisjunctionType disjunction)
+                    ? disjunction.getDisjunctions() : (type != null) ? List.of(type) : List.of();
+            for (PsiType alternative : alternatives) {
+                PsiClass caught = PsiUtil.resolveClassInType(alternative);
+                if (caught == null) {
+                    continue;
+                }
+                if (JACKSON_EXCEPTION_TYPES.stream()
+                        .anyMatch((String fqn) -> InheritanceUtil.isInheritor(caught, false, fqn))) {
+                    return true;
+                }
+                if (preceding && JACKSON_EXCEPTION_SUPERTYPES.contains(caught.getQualifiedName())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean isExceptionSafeUsage(PsiReferenceExpression usage) {
+        PsiElement argument = usage;
+        while (argument.getParent() instanceof PsiParenthesizedExpression) {
+            argument = argument.getParent();
+        }
+        PsiElement parent = argument.getParent();
+        if (parent instanceof com.intellij.psi.PsiThrowStatement) {
+            return true;
+        }
+        if (parent instanceof PsiReferenceExpression methodRef && methodRef.getQualifierExpression() == argument
+                && methodRef.getParent() instanceof PsiMethodCallExpression call) {
+            PsiMethod method = call.resolveMethod();
+            PsiClass owner = (method != null) ? method.getContainingClass() : null;
+            return owner != null && THROWABLE_MEMBER_OWNERS.contains(owner.getQualifiedName());
+        }
+        if (parent instanceof com.intellij.psi.PsiExpressionList arguments
+                && arguments.getParent() instanceof com.intellij.psi.PsiCallExpression call) {
+            PsiMethod method = call.resolveMethod();
+            return method != null && isThrowableParameter(method, List.of(arguments.getExpressions()).indexOf(argument));
+        }
+        return false;
+    }
+
+    private static boolean isThrowableParameter(PsiMethod method, int index) {
+        PsiParameter[] parameters = method.getParameterList().getParameters();
+        if (index < 0 || parameters.length == 0) {
+            return false;
+        }
+        PsiType type = parameters[Math.min(index, parameters.length - 1)].getType();
+        if (type instanceof com.intellij.psi.PsiEllipsisType ellipsis) {
+            type = ellipsis.getComponentType();
+        }
+        else if (index >= parameters.length) {
+            return false;
+        }
+        PsiClass parameterClass = PsiUtil.resolveClassInType(type);
+        return parameterClass != null && THROWABLE_PARAMETER_TYPES.contains(parameterClass.getQualifiedName());
+    }
+
+    private static boolean isIoException(PsiParameter parameter) {
+        PsiClass type = PsiUtil.resolveClassInType(parameter.getType());
+        return type != null && "java.io.IOException".equals(type.getQualifiedName());
+    }
+
+    private static boolean tryContainsJacksonCall(com.intellij.psi.PsiTryStatement tryStatement) {
+        if (tryStatement.getTryBlock() == null) {
+            return false;
+        }
+        for (PsiMethodCallExpression call : PsiTreeUtil.findChildrenOfType(tryStatement.getTryBlock(),
+                PsiMethodCallExpression.class)) {
+            PsiMethod resolved = call.resolveMethod();
+            PsiClass containing = (resolved != null) ? resolved.getContainingClass() : null;
+            if (containing != null && containing.getQualifiedName() != null
+                    && containing.getQualifiedName().startsWith("com.fasterxml.jackson.")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * In Spring Framework 6 the two-argument WebTestClient
+     * {@code jsonPath(expression, args...)} overload formatted {@code args} into
+     * the expression; it was deprecated and removed in Spring Framework 7. A
+     * Hamcrest matcher passed there never acted as an assertion, so that shape is
+     * an error with a safe rewrite to {@code value(matcher)}. Template arguments
+     * are rewritten to {@code expression.formatted(args)}, the form Spring 6
+     * evaluated.
+     */
+    private static final String WEB_TEST_CLIENT_BODY_CONTENT_SPEC =
+            "org.springframework.test.web.reactive.server.WebTestClient.BodyContentSpec";
+
+    private static final String HAMCREST_MATCHER = "org.hamcrest.Matcher";
+
+    private static final String JSON_PATH_MATCHER_MESSAGE = "The WebTestClient jsonPath(String, Object...) overload"
+            + " was removed in Spring Framework 7, and the matcher was only ever formatted into the expression;"
+            + " chain .value(matcher) on the one-argument jsonPath()";
+
+    private static final String JSON_PATH_TEMPLATE_MESSAGE = "The WebTestClient jsonPath(String, Object...) overload"
+            + " was removed in Spring Framework 7; format the arguments into the expression"
+            + " (for example with String.formatted) and call the one-argument jsonPath()";
+
+    private void visitJsonPathMatcherCall(PsiMethodCallExpression expression, ProblemsHolder holder) {
+        if (!"jsonPath".equals(expression.getMethodExpression().getReferenceName())) {
+            return;
+        }
+        PsiExpression[] args = expression.getArgumentList().getExpressions();
+        if (args.length < 2 || !isWebTestClientJsonPath(expression)) {
+            return;
+        }
+        PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
+        if (args.length == 2 && qualifier != null && isHamcrestMatcher(args[1])) {
+            holder.registerProblem(expression, JSON_PATH_MATCHER_MESSAGE, new ReplaceCallFix(
+                    "Chain .value() on jsonPath()", expression.getText(),
+                    qualifier.getText() + ".jsonPath(" + args[0].getText() + ").value(" + args[1].getText() + ")"));
+            return;
+        }
+        if (qualifier != null && PsiUtil.getLanguageLevel(expression).isAtLeast(LanguageLevel.JDK_15)) {
+            holder.registerProblem(expression, JSON_PATH_TEMPLATE_MESSAGE, new ReplaceCallFix(
+                    "Format arguments into the expression", expression.getText(),
+                    qualifier.getText() + ".jsonPath(" + formattedExpressionText(args) + ")"));
+            return;
+        }
+        holder.registerProblem(expression, JSON_PATH_TEMPLATE_MESSAGE);
+    }
+
+    /**
+     * {@code expression.formatted(args)}, the exact form the removed Spring 6
+     * overload evaluated; a compound expression is parenthesized so the call binds
+     * to the whole expression.
+     */
+    private static String formattedExpressionText(PsiExpression[] args) {
+        PsiExpression template = args[0];
+        boolean primary = template instanceof PsiLiteralExpression || template instanceof PsiReferenceExpression
+                || template instanceof PsiMethodCallExpression || template instanceof PsiParenthesizedExpression;
+        StringBuilder text = new StringBuilder(primary ? template.getText() : "(" + template.getText() + ")");
+        text.append(".formatted(");
+        for (int i = 1; i < args.length; i++) {
+            text.append((i > 1) ? ", " : "").append(args[i].getText());
+        }
+        return text.append(")").toString();
+    }
+
+    /**
+     * Whether the call targets one of the BodyContentSpec jsonPath overloads. All
+     * resolve candidates are checked because overload resolution can stay
+     * ambiguous while the varargs argument is still being typed.
+     */
+    private static boolean isWebTestClientJsonPath(PsiMethodCallExpression expression) {
+        for (com.intellij.psi.JavaResolveResult result : expression.getMethodExpression().multiResolve(false)) {
+            if (result.getElement() instanceof PsiMethod method && method.getContainingClass() != null
+                    && WEB_TEST_CLIENT_BODY_CONTENT_SPEC.equals(method.getContainingClass().getQualifiedName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isHamcrestMatcher(PsiExpression argument) {
+        PsiClass type = PsiUtil.resolveClassInType(argument.getType());
+        return type != null && (HAMCREST_MATCHER.equals(type.getQualifiedName())
+                || InheritanceUtil.isInheritor(type, HAMCREST_MATCHER));
+    }
+
+    /**
+     * Whether the rewrite guard holds for this call; otherwise the call survives
+     * in Jackson 3 (for example ObjectMapper.readValue(parser, type)) or the fix
+     * would be unsafe, and no problem is reported.
+     */
+    private static boolean rewritePossible(PsiMethodCallExpression expression, JacksonMethodFix fix) {
+        PsiExpression[] args = expression.getArgumentList().getExpressions();
+        return switch (fix.kind()) {
+            case RENAME, ITERATE -> true;
+            case FOR_TYPE_READER -> args.length == 2 && isTypeArgument(args[1]) && !isJsonParserArgument(args[0]);
+        };
+    }
+
+    private static boolean isTypeArgument(PsiExpression argument) {
+        if (argument instanceof PsiClassObjectAccessExpression) {
+            return true;
+        }
+        PsiClass type = PsiUtil.resolveClassInType(argument.getType());
+        String fqn = (type == null) ? null : type.getQualifiedName();
+        return fqn != null
+                && (JACKSON_API_OWNER_JAVA_LANG_CLASS.equals(fqn) || JACKSON_TYPE_REFERENCE_TYPES.contains(fqn));
+    }
+
+    private static boolean isJsonParserArgument(PsiExpression argument) {
+        PsiClass type = PsiUtil.resolveClassInType(argument.getType());
+        String fqn = (type == null) ? null : type.getQualifiedName();
+        return fqn != null && JACKSON_PARSER_TYPES.contains(fqn);
+    }
+
+    /**
+     * The Jackson 2 owner type of the call, from the resolved method or from the
+     * statically typed qualifier; null when neither is available.
+     */
+    private static String jacksonOwnerQualifiedName(PsiMethodCallExpression expression) {
+        PsiMethod resolved = expression.resolveMethod();
+        if (resolved != null && resolved.getContainingClass() != null) {
+            return resolved.getContainingClass().getQualifiedName();
+        }
+        PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
+        if (qualifier == null) {
+            return null;
+        }
+        PsiClass qualifierType = SpringInspectionUtil.resolvedClass(qualifier.getType());
+        return (qualifierType == null) ? null : qualifierType.getQualifiedName();
+    }
+
+    /**
+     * The Jackson 3 form of the call. An unqualified call (inside a subclass of
+     * the Jackson type) stays unqualified.
+     */
+    private static String rebuiltCallText(PsiMethodCallExpression expression, JacksonMethodFix fix) {
+        PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
+        String receiver = (qualifier != null) ? qualifier.getText() + "." : "";
+        PsiExpression[] args = expression.getArgumentList().getExpressions();
+        return switch (fix.kind()) {
+            case RENAME -> receiver + fix.newName() + expression.getArgumentList().getText();
+            case FOR_TYPE_READER -> receiver + "forType(" + args[1].getText() + ").readValue(" + args[0].getText()
+                    + ")";
+            case ITERATE -> receiver + fix.newName() + "().iterator()";
+        };
+    }
 
     private static final String JACKSON_MODULE_MESSAGE = "Jackson 2 modules moved to tools.jackson in Spring Boot 4;"
             + " java.time/Jdk8/parameter-names support is now built into Jackson 3 databind";
@@ -706,6 +1380,10 @@ public class SpringBoot4MigrationInspection extends AbstractBaseJavaLocalInspect
         if (TEST_REST_TEMPLATE_FQNS.contains(type) && !hasAnnotationInHierarchy(owner,
                 (PsiAnnotation a) -> matchingSetFqn(a, Set.of(AUTO_CONFIGURE_TEST_REST_TEMPLATE)) != null)) {
             return AUTO_CONFIGURE_TEST_REST_TEMPLATE;
+        }
+        if (WEB_TEST_CLIENT.equals(type) && !hasAnnotationInHierarchy(owner,
+                (PsiAnnotation a) -> matchingSetFqn(a, AUTO_CONFIGURE_WEB_TEST_CLIENT_FQNS) != null)) {
+            return AUTO_CONFIGURE_WEB_TEST_CLIENT;
         }
         return null;
     }
@@ -899,7 +1577,8 @@ public class SpringBoot4MigrationInspection extends AbstractBaseJavaLocalInspect
     private static boolean isJacksonDatabindPackage(String fqn) {
         return (fqn.startsWith("com.fasterxml.jackson.databind.") || fqn.startsWith("com.fasterxml.jackson.core.")
                 || fqn.startsWith("com.fasterxml.jackson.dataformat."))
-                && !JACKSON_RENAMED_TYPES.containsKey(fqn);
+                && !JACKSON_RENAMED_TYPES.containsKey(fqn)
+                && !JACKSON_REMOVED_TYPES.contains(fqn);
     }
 
     private static boolean isJacksonModulePackage(String fqn) {
@@ -1092,6 +1771,10 @@ public class SpringBoot4MigrationInspection extends AbstractBaseJavaLocalInspect
         MOCK_BEAN,
         JACKSON_PACKAGE,
         JACKSON_RENAMED_TYPE,
+        JACKSON_API,
+        JACKSON_CONSTRUCTOR,
+        JACKSON_IO_EXCEPTION,
+        JSON_PATH_MATCHER,
         BOOT_JACKSON_API,
         SECURITY_AND_CHAIN,
         SECURITY_NON_LAMBDA_DSL,
@@ -1240,6 +1923,152 @@ public class SpringBoot4MigrationInspection extends AbstractBaseJavaLocalInspect
         }
     }
 
+    /**
+     * Replaces a whole method call with a rebuilt form. The replacement text was
+     * built from the flagged call, so it carries the original receiver and
+     * arguments; a call edited after the problem was registered is left alone.
+     */
+    private static class ReplaceCallFix implements LocalQuickFix {
+        private final String name;
+        private final String callText;
+        private final String replacement;
+
+        ReplaceCallFix(String name, String callText, String replacement) {
+            this.name = name;
+            this.callText = callText;
+            this.replacement = replacement;
+        }
+
+        @Override
+        public @NotNull String getName() {
+            return this.name;
+        }
+
+        @Override
+        public @NotNull String getFamilyName() {
+            return "Spring Boot 4 migration";
+        }
+
+        @Override
+        public void applyFix(@NotNull Project project, @NotNull com.intellij.codeInspection.ProblemDescriptor descriptor) {
+            PsiElement element = descriptor.getPsiElement();
+            if (element == null || !this.callText.equals(element.getText())) {
+                return;
+            }
+            PsiExpression replacement = JavaPsiFacade.getElementFactory(project)
+                    .createExpressionFromText(this.replacement, element.getParent());
+            element.replace(replacement);
+        }
+    }
+
+    /**
+     * Marks the no-arg constructor of the flagged class with @JsonCreator so
+     * Jackson 3 selects it over the all-args constructor.
+     */
+    private static class AddJsonCreatorFix implements LocalQuickFix {
+
+        private final String name;
+
+        AddJsonCreatorFix(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public @NotNull String getName() {
+            return this.name;
+        }
+
+        @Override
+        public @NotNull String getFamilyName() {
+            return "Spring Boot 4 migration";
+        }
+
+        @Override
+        public void applyFix(@NotNull Project project, @NotNull com.intellij.codeInspection.ProblemDescriptor descriptor) {
+            PsiClass psiClass = PsiTreeUtil.getParentOfType(descriptor.getPsiElement(), PsiClass.class, false);
+            if (psiClass == null) {
+                return;
+            }
+            PsiMethod noArg = findNoArgConstructor(psiClass);
+            PsiModifierList modifiers = (noArg != null) ? noArg.getModifierList() : null;
+            if (modifiers == null || SpringInspectionUtil.hasAnnotation(modifiers, JSON_CREATOR, "JsonCreator")) {
+                return;
+            }
+            PsiAnnotation added = modifiers.addAnnotation(JSON_CREATOR);
+            JavaCodeStyleManager.getInstance(project).shortenClassReferences(added);
+        }
+    }
+
+    /**
+     * Routes @JsonCreator onto the Lombok-generated no-arg constructor through
+     * {@code onConstructor_}, so Jackson 3 selects it over the all-args one.
+     */
+    private static class AddLombokJsonCreatorFix implements LocalQuickFix {
+
+        @Override
+        public @NotNull String getName() {
+            return "Add onConstructor_ = @JsonCreator to @NoArgsConstructor";
+        }
+
+        @Override
+        public @NotNull String getFamilyName() {
+            return "Spring Boot 4 migration";
+        }
+
+        @Override
+        public void applyFix(@NotNull Project project, @NotNull com.intellij.codeInspection.ProblemDescriptor descriptor) {
+            PsiClass psiClass = PsiTreeUtil.getParentOfType(descriptor.getPsiElement(), PsiClass.class, false);
+            PsiAnnotation noArgs = LombokAnnotationUtil.findAnnotation(psiClass, LOMBOK_NO_ARGS_CONSTRUCTOR,
+                    "NoArgsConstructor");
+            if (noArgs == null || noArgs.findDeclaredAttributeValue("onConstructor") != null
+                    || noArgs.findDeclaredAttributeValue("onConstructor_") != null) {
+                return;
+            }
+            PsiAnnotationMemberValue creator = JavaPsiFacade.getElementFactory(project)
+                    .createAnnotationFromText("@" + JSON_CREATOR, noArgs);
+            PsiAnnotationMemberValue added = noArgs.setDeclaredAttributeValue("onConstructor_", creator);
+            if (added != null) {
+                JavaCodeStyleManager.getInstance(project).shortenClassReferences(added);
+            }
+        }
+    }
+
+    /**
+     * Widens {@code catch (IOException ex)} to the multi-catch
+     * {@code IOException | JacksonException}; registered only when the catch block
+     * keeps compiling with the widened parameter type.
+     */
+    private static class AddJacksonExceptionCatchFix implements LocalQuickFix {
+
+        @Override
+        public @NotNull String getName() {
+            return "Also catch JacksonException";
+        }
+
+        @Override
+        public @NotNull String getFamilyName() {
+            return "Spring Boot 4 migration";
+        }
+
+        @Override
+        public void applyFix(@NotNull Project project, @NotNull com.intellij.codeInspection.ProblemDescriptor descriptor) {
+            PsiParameter parameter = PsiTreeUtil.getParentOfType(descriptor.getPsiElement(), PsiParameter.class, false);
+            com.intellij.psi.PsiTypeElement typeElement = (parameter != null) ? parameter.getTypeElement() : null;
+            if (typeElement == null || parameter.getType() instanceof com.intellij.psi.PsiDisjunctionType) {
+                return;
+            }
+            PsiTryStatement template = (PsiTryStatement) JavaPsiFacade.getElementFactory(project)
+                    .createStatementFromText("try { } catch (" + typeElement.getText() + " | " + JACKSON_EXCEPTION
+                            + " " + parameter.getName() + ") { }", parameter);
+            PsiParameter templateParameter = template.getCatchBlockParameters()[0];
+            if (templateParameter.getTypeElement() == null) {
+                return;
+            }
+            PsiElement replaced = typeElement.replace(templateParameter.getTypeElement());
+            JavaCodeStyleManager.getInstance(project).shortenClassReferences(replaced);
+        }
+    }
+
     private static class DeleteCallStatementFix implements LocalQuickFix {
         @Override
         public @NotNull String getName() {
@@ -1311,6 +2140,30 @@ public class SpringBoot4MigrationInspection extends AbstractBaseJavaLocalInspect
     public static class JacksonRenamedType extends SpringBoot4MigrationInspection {
         public JacksonRenamedType() {
             super(Kind.JACKSON_RENAMED_TYPE);
+        }
+    }
+
+    public static class JacksonApi extends SpringBoot4MigrationInspection {
+        public JacksonApi() {
+            super(Kind.JACKSON_API);
+        }
+    }
+
+    public static class JsonPathMatcher extends SpringBoot4MigrationInspection {
+        public JsonPathMatcher() {
+            super(Kind.JSON_PATH_MATCHER);
+        }
+    }
+
+    public static class JacksonConstructorDefaults extends SpringBoot4MigrationInspection {
+        public JacksonConstructorDefaults() {
+            super(Kind.JACKSON_CONSTRUCTOR);
+        }
+    }
+
+    public static class JacksonIoException extends SpringBoot4MigrationInspection {
+        public JacksonIoException() {
+            super(Kind.JACKSON_IO_EXCEPTION);
         }
     }
 

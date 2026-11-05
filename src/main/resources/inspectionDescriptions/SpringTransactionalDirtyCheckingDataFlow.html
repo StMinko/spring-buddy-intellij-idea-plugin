@@ -12,7 +12,8 @@ mutate it without declaring <code>readOnly = true</code>.
     Methods that call a write operation (<code>save</code>, <code>saveAndFlush</code>, <code>delete*</code>,
     <code>persist</code>, <code>merge</code>, <code>flush</code>, ...) or load an entity through a repository
     method annotated with a write lock (<code>@Lock(PESSIMISTIC_WRITE)</code>, <code>*_FORCE_INCREMENT</code>)
-    are treated as intentional writes and are not reported.
+    are treated as intentional writes and are not reported. Passing the loaded entity to a writable
+    <code>@Transactional</code> method of another bean also counts as an intentional write.
 </p>
 <p>
     The quick-fix adds <code>readOnly = true</code> to the transactional annotation.
