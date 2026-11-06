@@ -5,7 +5,9 @@
     can observe non-repeatable reads. Consider optimistic locking with @Version or stronger isolation such as
     REPEATABLE_READ or SERIALIZABLE.</p>
 <p>Read-only transactions are excluded, as are methods that acquire a pessimistic lock through a repository method
-    annotated with <code>@Lock</code> or a <code>@Query</code> containing <code>FOR UPDATE</code> or
-    <code>FOR NO KEY UPDATE</code>, including same-class helpers.</p>
+    annotated with <code>@Lock</code> or a <code>@Query</code> containing <code>FOR UPDATE</code>,
+    <code>FOR NO KEY UPDATE</code> or a PostgreSQL advisory lock (<code>pg_advisory_xact_lock</code>). The lock is
+    also found through called methods, including helpers in other beans that run such SQL with
+    <code>JdbcTemplate</code>, up to three calls deep.</p>
 </body>
 </html>

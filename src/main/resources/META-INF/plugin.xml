@@ -5,6 +5,12 @@
 
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.java</depends>
+    <!-- Since 2026.2 JCEF lives in the bundled Web Browser (JCEF) plugin; the
+         com.intellij.modules.jcef alias exists since 2025.3.1, so this stays
+         compatible with the 261+ range. Without it the plugin classloader has
+         no intellij.platform.ui.jcef parent and JBCef* classes throw
+         NoClassDefFoundError. -->
+    <depends>com.intellij.modules.jcef</depends>
     <depends>com.intellij.java</depends>
     <depends>com.intellij.spring</depends>
     <depends>com.intellij.spring.data</depends>

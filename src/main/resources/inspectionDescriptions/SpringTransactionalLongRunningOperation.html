@@ -7,5 +7,9 @@
 <p>Calls are identified by client-like receiver types, such as <code>*Client</code>, <code>RestTemplate</code>,
     <code>RestOperations</code>, or <code>WebClient</code>. Generic method names such as <code>get</code> and
     <code>execute</code> do not count on their own.</p>
+<p>A <code>*Client</code> call is not reported when every implementation of the called method in the project only
+    does local work, such as building an OAuth URL, and reaches no client call or <code>sleep</code> through its
+    own calls. <code>RestTemplate</code>, <code>RestOperations</code> and <code>WebClient</code> calls are always
+    reported.</p>
 </body>
 </html>

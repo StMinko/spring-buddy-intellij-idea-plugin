@@ -5,6 +5,7 @@
     transaction boundary. A failure between writes can leave partially committed data. Add @Transactional at the service
     boundary unless the class or a private transactional caller already provides one.</p>
 <p>Writes inside <code>TransactionTemplate</code> or <code>TransactionOperations</code> callbacks are excluded. A private
-    helper is treated as covered only when it has an in-class caller and every caller path leads to a transaction boundary.</p>
+    helper is treated as covered only when it has an in-class caller and every caller path leads to a transaction boundary.
+    Javadoc <code>{@link}</code> references do not count as callers.</p>
 </body>
 </html>

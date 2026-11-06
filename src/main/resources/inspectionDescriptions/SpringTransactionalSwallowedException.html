@@ -4,5 +4,8 @@
 <p>Reports @Transactional methods with catch blocks that catch rollback-relevant exceptions and do not rethrow.
     Swallowed exceptions let the method return normally, causing the transaction to commit. Rethrow, mark rollback-only,
     or move error handling outside the transaction.</p>
+<p>A catch block that ends with <code>return</code> is not reported when no repository or
+    <code>EntityManager</code> write happens before or inside the <code>try</code>: the transaction holds no
+    changes yet, so committing it is harmless.</p>
 </body>
 </html>

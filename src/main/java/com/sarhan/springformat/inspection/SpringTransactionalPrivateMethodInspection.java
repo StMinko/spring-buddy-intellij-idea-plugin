@@ -49,19 +49,24 @@ import com.intellij.psi.PsiFileFactory;
 import com.intellij.psi.PsiForStatement;
 import com.intellij.psi.PsiForeachStatement;
 import com.intellij.psi.PsiIdentifier;
+import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiModifierList;
 import com.intellij.psi.PsiNameValuePair;
+import com.intellij.psi.PsiParenthesizedExpression;
+import com.intellij.psi.PsiPolyadicExpression;
 import com.intellij.psi.PsiReferenceExpression;
 import com.intellij.psi.PsiReturnStatement;
+import com.intellij.psi.PsiStatement;
 import com.intellij.psi.PsiThisExpression;
 import com.intellij.psi.PsiThrowStatement;
 import com.intellij.psi.PsiTryStatement;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeElement;
 import com.intellij.psi.PsiWhileStatement;
+import com.intellij.psi.search.searches.OverridingMethodsSearch;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -79,6 +84,8 @@ import org.jetbrains.annotations.NotNull;
 public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJavaLocalInspectionTool {
 
     private final Kind kind;
+
+    private static final int MAX_CALL_SEARCH_DEPTH = 3;
 
     public SpringTransactionalPrivateMethodInspection() {
         this(Kind.PRIVATE_METHOD);
@@ -643,16 +650,15 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
     }
 
     private static boolean takesPessimisticLock(PsiMethod method) {
-        return takesPessimisticLock(method, new HashSet<>());
+        return takesPessimisticLock(method, new HashSet<>(), 0);
     }
 
-    private static boolean takesPessimisticLock(PsiMethod method, Set<PsiMethod> visited) {
-        if (!visited.add(method)) {
+    private static boolean takesPessimisticLock(PsiMethod method, Set<PsiMethod> visited, int depth) {
+        if (depth > MAX_CALL_SEARCH_DEPTH || !visited.add(method)) {
             return false;
         }
         PsiCodeBlock body = method.getBody();
-        PsiClass containingClass = method.getContainingClass();
-        if (body == null || containingClass == null) {
+        if (body == null) {
             return false;
         }
         boolean[] found = {false};
@@ -661,14 +667,40 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
             public void visitMethodCallExpression(@NotNull PsiMethodCallExpression expression) {
                 super.visitMethodCallExpression(expression);
                 PsiMethod called = expression.resolveMethod();
-                if (hasPessimisticLock(called)
-                        || (called != null && called.getContainingClass() == containingClass
-                        && takesPessimisticLock(called, visited))) {
+                if (hasPessimisticLock(called) || (called != null && takesPessimisticLock(called, visited, depth + 1))) {
+                    found[0] = true;
+                }
+            }
+
+            @Override
+            public void visitLiteralExpression(@NotNull PsiLiteralExpression expression) {
+                super.visitLiteralExpression(expression);
+                if (expression.getValue() instanceof String && isLockingSqlStatement(expression)) {
                     found[0] = true;
                 }
             }
         });
         return found[0];
+    }
+
+    /** Joins the literal parts of a string concatenation so dynamic table names still read as one SQL statement. */
+    private static boolean isLockingSqlStatement(PsiLiteralExpression literal) {
+        PsiElement statement = literal;
+        while (statement.getParent() instanceof PsiPolyadicExpression
+                || statement.getParent() instanceof PsiParenthesizedExpression) {
+            statement = statement.getParent();
+        }
+        StringBuilder sql = new StringBuilder();
+        statement.accept(new JavaRecursiveElementVisitor() {
+            @Override
+            public void visitLiteralExpression(@NotNull PsiLiteralExpression part) {
+                if (part.getValue() instanceof String text) {
+                    sql.append(text).append(' ');
+                }
+            }
+        });
+        String text = sql.toString().toLowerCase(Locale.ROOT);
+        return text.contains("select") && isLockingSql(text);
     }
 
     private static boolean hasPessimisticLock(PsiMethod method) {
@@ -681,11 +713,13 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
         }
         PsiAnnotation query = SpringInspectionUtil.findAnnotation(modifiers,
                 "org.springframework.data.jpa.repository.Query", "Query");
-        if (query == null) {
-            return false;
-        }
-        String queryText = query.getText().toLowerCase(Locale.ROOT);
-        return queryText.contains("for update") || queryText.contains("for no key update");
+        return query != null && isLockingSql(query.getText());
+    }
+
+    private static boolean isLockingSql(String sql) {
+        String text = sql.toLowerCase(Locale.ROOT);
+        return text.contains("for update") || text.contains("for no key update")
+                || text.contains("pg_advisory_xact_lock") || text.contains("pg_advisory_lock");
     }
 
     private static boolean isReadOperation(PsiMethodCallExpression expression) {
@@ -1059,24 +1093,90 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
         if ("sleep".equals(methodName)) {
             return true;
         }
+        ReceiverKind receiver = receiverKind(expression);
+        if (receiver == ReceiverKind.HTTP_TEMPLATE) {
+            return true;
+        }
+        if (receiver == ReceiverKind.NONE) {
+            return false;
+        }
+        PsiMethod target = expression.resolveMethod();
+        return target == null || !hasOnlyLocalImplementations(target);
+    }
+
+    private enum ReceiverKind { NONE, CLIENT, HTTP_TEMPLATE }
+
+    private static ReceiverKind receiverKind(PsiMethodCallExpression expression) {
         PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
         if (qualifier == null) {
-            return false;
+            return ReceiverKind.NONE;
         }
         PsiType qualifierType = qualifier.getType();
-        if (qualifierType instanceof PsiClassType classType) {
-            String className = classType.getClassName();
-            if (className != null) {
-                String lowerClassName = className.toLowerCase(Locale.ROOT);
-                return className.endsWith("Client") || lowerClassName.contains("resttemplate")
-                        || lowerClassName.contains("restoperations") || lowerClassName.contains("webclient");
-            }
+        String name;
+        if (qualifierType instanceof PsiClassType classType && classType.getClassName() != null) {
+            name = classType.getClassName();
         } else if (qualifierType != null) {
+            return ReceiverKind.NONE;
+        } else {
+            name = qualifier.getText();
+        }
+        String lower = name.toLowerCase(Locale.ROOT);
+        if (lower.contains("resttemplate") || lower.contains("restoperations") || lower.contains("webclient")) {
+            return ReceiverKind.HTTP_TEMPLATE;
+        }
+        boolean client = qualifierType != null ? name.endsWith("Client") : lower.contains("client");
+        return client ? ReceiverKind.CLIENT : ReceiverKind.NONE;
+    }
+
+    /**
+     * A client method is local when every implementation in the project has source and none of them reaches a
+     * client call or {@code sleep}, following only self calls. Library methods have no source and stay reported.
+     */
+    private static boolean hasOnlyLocalImplementations(PsiMethod method) {
+        Set<PsiMethod> implementations = new HashSet<>(OverridingMethodsSearch.search(method).findAll());
+        implementations.add(method);
+        boolean hasBody = false;
+        for (PsiMethod implementation : implementations) {
+            if (implementation.getBody() == null) {
+                if (!implementation.hasModifierProperty(PsiModifier.ABSTRACT)) {
+                    return false;
+                }
+                continue;
+            }
+            hasBody = true;
+            if (reachesExternalCall(implementation, new HashSet<>(), 0)) {
+                return false;
+            }
+        }
+        return hasBody;
+    }
+
+    private static boolean reachesExternalCall(PsiMethod method, Set<PsiMethod> visited, int depth) {
+        PsiCodeBlock body = method.getBody();
+        if (body == null || depth > MAX_CALL_SEARCH_DEPTH) {
+            return true;
+        }
+        if (!visited.add(method)) {
             return false;
         }
-        String lowerQualifier = qualifier.getText().toLowerCase(Locale.ROOT);
-        return lowerQualifier.contains("client") || lowerQualifier.contains("resttemplate")
-                || lowerQualifier.contains("restoperations") || lowerQualifier.contains("webclient");
+        boolean[] found = {false};
+        body.accept(new JavaRecursiveElementVisitor() {
+            @Override
+            public void visitMethodCallExpression(@NotNull PsiMethodCallExpression expression) {
+                super.visitMethodCallExpression(expression);
+                PsiExpression qualifier = expression.getMethodExpression().getQualifierExpression();
+                if (qualifier == null || qualifier instanceof PsiThisExpression) {
+                    PsiMethod called = expression.resolveMethod();
+                    if (called != null && reachesExternalCall(called, visited, depth + 1)) {
+                        found[0] = true;
+                    }
+                } else if ("sleep".equals(referenceName(expression.getMethodExpression()))
+                        || receiverKind(expression) != ReceiverKind.NONE) {
+                    found[0] = true;
+                }
+            }
+        });
+        return found[0];
     }
 
     private static boolean hasTimeout(PsiAnnotation annotation) {
@@ -1127,13 +1227,37 @@ public class SpringTransactionalPrivateMethodInspection extends AbstractBaseJava
                 super.visitTryStatement(statement);
                 for (PsiCatchSection catchSection : statement.getCatchSections()) {
                     if (catchSection.getCatchType() != null && isRollbackExceptionType(catchSection.getCatchType())
-                            && !catchBlockRethrows(catchSection.getCatchBlock())) {
+                            && !catchBlockRethrows(catchSection.getCatchBlock())
+                            && !(exitsMethod(catchSection.getCatchBlock()) && !writesBefore(method, statement))) {
                         swallowed[0] = true;
                     }
                 }
             }
         });
         return swallowed[0];
+    }
+
+    /** A catch that returns before any write leaves nothing to roll back, so returning normally is safe. */
+    private static boolean exitsMethod(PsiCodeBlock block) {
+        PsiStatement[] statements = block != null ? block.getStatements() : PsiStatement.EMPTY_ARRAY;
+        return statements.length > 0 && statements[statements.length - 1] instanceof PsiReturnStatement;
+    }
+
+    private static boolean writesBefore(PsiMethod method, PsiTryStatement statement) {
+        PsiCodeBlock body = method.getBody();
+        int tryEnd = statement.getTryBlock() != null ? statement.getTryBlock().getTextRange().getEndOffset()
+                : statement.getTextRange().getEndOffset();
+        boolean[] found = {false};
+        body.accept(new JavaRecursiveElementVisitor() {
+            @Override
+            public void visitMethodCallExpression(@NotNull PsiMethodCallExpression expression) {
+                super.visitMethodCallExpression(expression);
+                if (expression.getTextRange().getStartOffset() < tryEnd && isWriteOperation(expression)) {
+                    found[0] = true;
+                }
+            }
+        });
+        return found[0];
     }
 
     private static boolean isRollbackExceptionType(PsiType type) {

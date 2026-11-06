@@ -425,6 +425,45 @@ public class SpringTransactionalPrivateMethodInspectionTest extends BasePlatform
         this.myFixture.checkHighlighting(false, false, true, true);
     }
 
+    public void testDoesNotReportSwallowedExceptionWhenCatchReturnsBeforeAnyWrite() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.SwallowedException());
+        this.myFixture.configureByText("Sample.java", """
+                @interface Transactional { }
+                class Sample {
+                    Repository repository;
+                    Gateway gateway;
+                    @Transactional
+                    String refund(long id) {
+                        Object payment = this.repository.findById(id);
+                        try {
+                            this.gateway.refund(payment);
+                        } catch (RuntimeException ex) {
+                            return "FAILED";
+                        }
+                        this.repository.save(payment);
+                        return "REFUNDED";
+                    }
+                    @Transactional
+                    String refundAfterWrite(long id) {
+                        Object payment = this.repository.findById(id);
+                        this.repository.save(payment);
+                        try {
+                            this.gateway.refund(payment);
+                        } catch (RuntimeException ex) {
+                            return "FAILED";
+                        }
+                        return "REFUNDED";
+                    }
+                }
+                interface Gateway { void refund(Object payment); }
+                interface Repository extends org.springframework.data.repository.CrudRepository<Object, Long> {
+                    Object findById(long id);
+                    Object save(Object value);
+                }
+                """);
+        Assertions.assertThat(this.highlighted("Exception is swallowed inside @Transactional method; transaction may commit unexpectedly")).containsExactly("refundAfterWrite");
+    }
+
     public void testReportsAsyncTransactionalMethod() {
         this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.AsyncBoundary());
         this.myFixture.configureByText("Sample.java", """
@@ -541,6 +580,49 @@ public class SpringTransactionalPrivateMethodInspectionTest extends BasePlatform
         Assertions.assertThat(this.myFixture.doHighlighting())
                 .anyMatch(highlight -> "Long-running work inside @Transactional may hold a database connection too long"
                         .equals(highlight.getDescription()));
+    }
+
+    public void testDoesNotReportClientMethodWhoseImplementationIsLocal() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.LongRunningOperation());
+        this.myFixture.configureByText("Sample.java", """
+                @interface Transactional { }
+                class Sample {
+                    OAuthClient oauthClient;
+                    @Transactional
+                    String begin() {
+                        return this.oauthClient.authorizeUrl("state");
+                    }
+                    @Transactional
+                    String complete() {
+                        return this.oauthClient.exchangeCode("code");
+                    }
+                }
+                interface OAuthClient {
+                    String authorizeUrl(String state);
+                    String exchangeCode(String code);
+                }
+                class HttpOAuthClient implements OAuthClient {
+                    HttpClient httpClient;
+                    String clientId;
+                    @Override
+                    public String authorizeUrl(String state) {
+                        this.require(this.clientId);
+                        return "https://example.com/authorize?state=" + state;
+                    }
+                    @Override
+                    public String exchangeCode(String code) {
+                        return this.send(code);
+                    }
+                    private String send(String body) {
+                        return this.httpClient.send(body);
+                    }
+                    private void require(String value) {
+                        if (value == null) { throw new IllegalStateException(); }
+                    }
+                }
+                interface HttpClient { String send(String body); }
+                """);
+        Assertions.assertThat(this.highlighted("Long-running work inside @Transactional may hold a database connection too long")).containsExactly("complete");
     }
 
     public void testReportsTransactionalOnIntegrationTestClass() {
@@ -705,6 +787,67 @@ public class SpringTransactionalPrivateMethodInspectionTest extends BasePlatform
                 class User { }
                 """);
         this.myFixture.checkHighlighting(true, false, true, true);
+    }
+
+    public void testDoesNotReportWeakIsolationWhenRepositoryTakesAdvisoryLock() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.WeakIsolation());
+        this.myFixture.configureByText("Sample.java", """
+                @interface Transactional { boolean readOnly() default false; }
+                @interface Query { String value(); boolean nativeQuery() default false; }
+                class Sample {
+                    ScheduleRepository repository;
+                    @Transactional
+                    void materialize() {
+                        this.repository.lockSchedule("key");
+                        this.repository.findById(1L);
+                        this.repository.findById(2L);
+                    }
+                }
+                interface ScheduleRepository {
+                    @Query(value = "select cast(pg_advisory_xact_lock(hashtext(:key)) as text)", nativeQuery = true)
+                    String lockSchedule(String key);
+                    Object findById(long id);
+                }
+                """);
+        Assertions.assertThat(this.highlighted("Multiple reads with default/weak isolation can allow non-repeatable reads")).isEmpty();
+    }
+
+    public void testDoesNotReportWeakIsolationWhenLockIsTakenInOtherBean() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.WeakIsolation());
+        this.myFixture.configureByText("Sample.java", """
+                @interface Transactional { boolean readOnly() default false; }
+                class Sample {
+                    UserRepository repository;
+                    Targets targets;
+                    @Transactional
+                    void create() {
+                        this.targets.lockAndResolve(1L);
+                        this.repository.findById(1L);
+                        this.repository.findById(2L);
+                    }
+                    @Transactional
+                    void resolveOnly() {
+                        this.targets.resolve(1L);
+                        this.repository.findById(1L);
+                        this.repository.findById(2L);
+                    }
+                }
+                class Targets {
+                    Jdbc jdbc;
+                    Log log;
+                    void lockAndResolve(long id) {
+                        this.jdbc.queryForList("SELECT id FROM " + "targets" + " WHERE id = ? FOR UPDATE", id);
+                    }
+                    void resolve(long id) {
+                        this.log.info("waiting for update");
+                        this.jdbc.queryForList("SELECT id FROM targets WHERE id = ?", id);
+                    }
+                }
+                interface Log { void info(String message); }
+                interface Jdbc { java.util.List<Object> queryForList(String sql, Object... args); }
+                interface UserRepository { Object findById(long id); }
+                """);
+        Assertions.assertThat(this.highlighted("Multiple reads with default/weak isolation can allow non-repeatable reads")).containsExactly("resolveOnly");
     }
 
     public void testReportsWeakIsolationForMultipleReadsWithoutLock() {
@@ -888,6 +1031,25 @@ public class SpringTransactionalPrivateMethodInspectionTest extends BasePlatform
                         .equals(highlight.getDescription()));
     }
 
+    public void testDoesNotReportPrivateHelperReferencedFromJavadoc() {
+        this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.MultipleWritesWithoutTransaction());
+        this.myFixture.configureByText("Sample.java", """
+                class Sample {
+                    Repository repository;
+                    @Transactional
+                    void update() { persist(); }
+                    /** Runs after {@link #persist}. */
+                    void unrelated() { }
+                    private void persist() {
+                        repository.save();
+                        repository.delete();
+                    }
+                    interface Repository { void save(); void delete(); }
+                }
+                """);
+        Assertions.assertThat(this.highlighted("Method performs multiple write operations without @Transactional")).isEmpty();
+    }
+
     public void testReportsPrivateHelperReachedFromNonTransactionalMethod() {
         this.myFixture.enableInspections(new SpringTransactionalPrivateMethodInspection.MultipleWritesWithoutTransaction());
         this.myFixture.configureByText("Sample.java", """
@@ -1059,5 +1221,12 @@ public class SpringTransactionalPrivateMethodInspectionTest extends BasePlatform
     private void assertNoProblem(String descriptionPrefix) {
         Assertions.assertThat(this.myFixture.doHighlighting())
                 .noneMatch(info -> info.getDescription() != null && info.getDescription().startsWith(descriptionPrefix));
+    }
+
+    private java.util.List<String> highlighted(String description) {
+        return this.myFixture.doHighlighting().stream()
+                .filter(info -> description.equals(info.getDescription()))
+                .map(info -> info.getText())
+                .toList();
     }
 }

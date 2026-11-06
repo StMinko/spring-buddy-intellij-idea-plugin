@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.sarhan.springformat"
-version = "1.0.7"
+version = "1.0.9"
 
 repositories {
     mavenCentral()
@@ -36,13 +36,15 @@ dependencies {
         bundledPlugin("com.intellij.spring.boot")
         bundledPlugin("com.intellij.spring.data")
         bundledPlugin("com.intellij.spring.mvc")
+        // Since 2026.2 JCEF classes ship in the bundled Web Browser (JCEF) plugin
+        bundledPlugin("com.intellij.modules.jcef")
     }
 }
 
 intellijPlatform {
     pluginConfiguration {
         name = "Spring Buddy"
-        version = "1.0.7"
+        version = "1.0.9"
         description = """
             <h2>Make invisible Spring runtime behavior visible.</h2>
               <p>
@@ -70,6 +72,17 @@ intellijPlatform {
               </p>
         """.trimIndent()
         changeNotes = """
+            <h3>1.0.9</h3>
+            <ul>
+              <li><b>Fewer false positives for weak transaction isolation:</b> PostgreSQL advisory locks (<code>pg_advisory_xact_lock</code>) now count as locks. <code>FOR UPDATE</code> locks are now also found in helpers of other beans, up to three calls deep, including SQL run through <code>JdbcTemplate</code>.</li>
+              <li><b>Fewer false positives for long-running work inside <code>@Transactional</code>:</b> a <code>*Client</code> call is no longer reported when every implementation in the project only does local work, such as building an OAuth URL. <code>RestTemplate</code>, <code>RestOperations</code> and <code>WebClient</code> calls are still always reported.</li>
+              <li><b>Fewer false positives for swallowed exceptions:</b> a catch block that ends with <code>return</code> is no longer reported when no write happens before or inside the <code>try</code>, because the transaction has nothing to commit yet.</li>
+              <li><b>Fewer false positives for multiple writes without <code>@Transactional</code>:</b> a Javadoc <code>{@link}</code> to a private write helper no longer counts as a caller without a transaction.</li>
+            </ul>
+            <h3>1.0.8</h3>
+            <ul>
+              <li><b>Fixed a crash in the flow diagram tool windows on 2026.2 and later:</b> since 2026.2 the embedded browser (JCEF) classes moved out of the platform into the bundled Web Browser (JCEF) plugin. Spring Buddy did not declare that dependency, so opening a transaction or unexpected-rollback flow diagram could fail with <code>NoClassDefFoundError: com/intellij/ui/jcef/JBCefBrowserBase</code>. The plugin now declares the required <code>com.intellij.modules.jcef</code> dependency and the diagrams open again.</li>
+            </ul>
             <h3>1.0.7</h3>
             <ul>
               <li><b>Fewer false positives for <code>@Async</code> with <code>@TransactionalEventListener</code>:</b> only listeners with <code>phase = BEFORE_COMMIT</code> are reported. The default <code>AFTER_COMMIT</code> phase, and <code>AFTER_ROLLBACK</code> and <code>AFTER_COMPLETION</code>, start the async task after the transaction has completed, so the listener only sees committed data.</li>

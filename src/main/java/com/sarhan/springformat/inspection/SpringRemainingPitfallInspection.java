@@ -48,6 +48,7 @@ import com.intellij.psi.PsiThrowStatement;
 import com.intellij.psi.PsiTryStatement;
 import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiTypeElement;
+import com.intellij.psi.javadoc.PsiDocComment;
 import com.intellij.psi.search.LocalSearchScope;
 import com.intellij.psi.search.searches.ReferencesSearch;
 import com.intellij.psi.util.PsiTreeUtil;
@@ -304,7 +305,8 @@ public class SpringRemainingPitfallInspection extends AbstractBaseJavaLocalInspe
             return true;
         }
         for (PsiReference reference : ReferencesSearch.search(method, new LocalSearchScope(scope)).findAll()) {
-            if (isInsideTransactionTemplateCallback(reference.getElement())) {
+            if (isInsideTransactionTemplateCallback(reference.getElement())
+                    || PsiTreeUtil.getParentOfType(reference.getElement(), PsiDocComment.class) != null) {
                 continue;
             }
             PsiMethodCallExpression call = PsiTreeUtil.getParentOfType(reference.getElement(), PsiMethodCallExpression.class);
