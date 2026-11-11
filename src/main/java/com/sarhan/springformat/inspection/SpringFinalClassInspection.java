@@ -31,7 +31,6 @@ import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiAnonymousClass;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElementVisitor;
-import com.intellij.psi.PsiKeyword;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiModifier;
 import com.intellij.psi.PsiModifierList;
@@ -39,7 +38,8 @@ import org.jetbrains.annotations.NotNull;
 
 /**
  * Detects classes that can be declared {@code final} because they have only
- * private or protected constructors and no subclasses, preventing accidental extension.
+ * private constructors (or are private with an implicit constructor) and no nested or
+ * anonymous subclasses, preventing accidental extension.
  *
  * @author Akmal Sarhan
  */
@@ -67,12 +67,13 @@ public class SpringFinalClassInspection extends AbstractBaseJavaLocalInspectionT
     }
 
     private static boolean shouldBeFinal(PsiClass psiClass) {
-        if (psiClass instanceof PsiAnonymousClass || psiClass.isInterface() || psiClass.isEnum()
-                || psiClass.isAnnotationType() || psiClass.isRecord()
-                || psiClass.hasModifierProperty(PsiModifier.FINAL)
-                || psiClass.hasModifierProperty(PsiModifier.ABSTRACT)
-                || hasNestedSubclass(psiClass)
-                || isSuperClassOfAnonymousClass(psiClass)) {
+        if (!isCandidateKind(psiClass)) {
+            return false;
+        }
+        if (psiClass.hasModifierProperty(PsiModifier.FINAL) || psiClass.hasModifierProperty(PsiModifier.ABSTRACT)) {
+            return false;
+        }
+        if (hasNestedSubclass(psiClass) || isSuperClassOfAnonymousClass(psiClass)) {
             return false;
         }
         PsiMethod[] constructors = Arrays.stream(psiClass.getConstructors())
@@ -81,20 +82,31 @@ public class SpringFinalClassInspection extends AbstractBaseJavaLocalInspectionT
         if (constructors.length == 0) {
             return psiClass.hasModifierProperty(PsiModifier.PRIVATE);
         }
+        // Mirrors Checkstyle FinalClass: only private constructors qualify. A protected
+        // constructor explicitly invites subclassing (possibly from other files/modules).
         for (PsiMethod constructor : constructors) {
-            if (!constructor.hasModifierProperty(PsiModifier.PRIVATE)
-                    && !constructor.hasModifierProperty(PsiModifier.PROTECTED)) {
+            if (!constructor.hasModifierProperty(PsiModifier.PRIVATE)) {
                 return false;
             }
         }
         return true;
     }
 
+    private static boolean isCandidateKind(PsiClass psiClass) {
+        if (psiClass instanceof PsiAnonymousClass) {
+            return false;
+        }
+        if (psiClass.isInterface() || psiClass.isEnum()) {
+            return false;
+        }
+        return !psiClass.isAnnotationType() && !psiClass.isRecord();
+    }
+
     private static boolean hasNestedSubclass(PsiClass psiClass) {
         Set<String> names = classNames(psiClass);
         for (PsiClass innerClass : psiClass.getAllInnerClasses()) {
             PsiClass superClass = innerClass.getSuperClass();
-            if (superClass != null && names.contains(superClass.getName())) {
+            if ((superClass != null) && names.contains(superClass.getName())) {
                 return true;
             }
         }
@@ -108,7 +120,7 @@ public class SpringFinalClassInspection extends AbstractBaseJavaLocalInspectionT
             @Override
             public void visitAnonymousClass(@NotNull PsiAnonymousClass anonymousClass) {
                 PsiClass superClass = anonymousClass.getSuperClass();
-                if (superClass != null && names.contains(superClass.getName())) {
+                if ((superClass != null) && names.contains(superClass.getName())) {
                     found[0] = true;
                 }
             }
@@ -145,9 +157,10 @@ public class SpringFinalClassInspection extends AbstractBaseJavaLocalInspectionT
 
         @Override
         public void applyFix(@NotNull Project project, @NotNull ProblemDescriptor descriptor) {
-            PsiClass psiClass = descriptor.getPsiElement().getParent() instanceof PsiClass cls
-                    ? cls : null;
-            if (psiClass == null || psiClass.hasModifierProperty(PsiModifier.FINAL)) {
+            if (!(descriptor.getPsiElement().getParent() instanceof PsiClass psiClass)) {
+                return;
+            }
+            if (psiClass.hasModifierProperty(PsiModifier.FINAL)) {
                 return;
             }
             PsiModifierList modifierList = psiClass.getModifierList();

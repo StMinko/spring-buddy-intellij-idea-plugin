@@ -46,11 +46,35 @@ public class SpringFinalClassInspectionTest extends BasePlatformTestCase {
         this.myFixture.checkHighlighting(false, false, true, true);
     }
 
-    public void testFlagsClassWithProtectedConstructorOnly() {
+    public void testDoesNotFlagClassWithProtectedConstructorOnly() {
         this.myFixture.enableInspections(new SpringFinalClassInspection());
         this.myFixture.configureByText("Sample.java", """
-                class <warning descr="Class can be declared final">Sample</warning> {
+                class Sample {
                     protected Sample() {
+                    }
+                }
+                """);
+        this.myFixture.checkHighlighting(false, false, true, true);
+    }
+
+    public void testDoesNotFlagGenericBaseClassWithProtectedConstructor() {
+        this.myFixture.enableInspections(new SpringFinalClassInspection());
+        this.myFixture.configureByText("AbstractAuditedSpecificationClient.java", """
+                public class AbstractAuditedSpecificationClient<E, I> {
+                    protected AbstractAuditedSpecificationClient(String baseUrl) {
+                    }
+                }
+                """);
+        this.myFixture.checkHighlighting(false, false, true, true);
+    }
+
+    public void testDoesNotFlagClassWithPrivateAndProtectedConstructors() {
+        this.myFixture.enableInspections(new SpringFinalClassInspection());
+        this.myFixture.configureByText("Sample.java", """
+                class Sample {
+                    private Sample() {
+                    }
+                    protected Sample(String value) {
                     }
                 }
                 """);

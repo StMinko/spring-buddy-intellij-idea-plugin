@@ -1816,7 +1816,7 @@ h2 .count {
 <article class="card" data-level="warning">
 <div class="class-name">SpringFinalClassInspection</div>
 <div class="display-name">Classes with private construction should be final<span class="badge yellow">WARNING</span><span class="badge fix">FIX</span></div>
-<div class="description">Detects classes that can be declared <pre class="code"> final</pre> because they have only private or protected constructors and no subclasses, preventing accidental extension.</div>
+<div class="description">Detects classes that can be declared <pre class="code"> final</pre> because they have only private constructors (or are private with an implicit constructor) and no nested or anonymous subclasses, preventing accidental extension.</div>
 </article>
 <article class="card" data-level="warning">
 <div class="class-name">SpringHideUtilityClassConstructorInspection</div>
