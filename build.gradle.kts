@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.sarhan.springformat"
-version = "1.0.10"
+version = "1.0.11"
 
 repositories {
     mavenCentral()
@@ -44,7 +44,7 @@ dependencies {
 intellijPlatform {
     pluginConfiguration {
         name = "Spring Buddy"
-        version = "1.0.10"
+        version = "1.0.11"
         description = """
             <h2>Make invisible Spring runtime behavior visible.</h2>
               <p>
@@ -72,6 +72,12 @@ intellijPlatform {
               </p>
         """.trimIndent()
         changeNotes = """
+            <h3>1.0.11</h3>
+            <ul>
+              <li><b>Fewer false positives for final classes:</b> classes with protected constructors are no longer suggested to be made <code>final</code>, since those constructors allow subclassing. The inspection now requires all declared constructors to be private; private classes with an implicit constructor remain eligible.</li>
+              <li><b>Restored clean plugin builds:</b> added the missing <code>TransactionNode</code> model used by the transaction graph builder and renderer.</li>
+              <li><b>Fixed Gradle wrapper startup with Java paths containing spaces:</b> the Java compatibility check now quotes the executable path correctly, avoiding errors such as <code>/c/Program: No such file or directory</code> in Git Bash.</li>
+            </ul>
             <h3>1.0.10</h3>
             <ul>
               <li><b>New ERROR-level Hibernate migration inspection: association-typed query parameter binding.</b> Binding a String (or any non-association value) to a named parameter that the query compares against an association-typed path &mdash; for example a field that a migration turned from a plain String into a <code>@ManyToOne</code> reference &mdash; is legal JPQL, but Hibernate 6 fails the query at runtime with <code>QueryArgumentException: Argument [x] of type [java.lang.String] did not match parameter type [AssociationEntity]</code>. Older Hibernate versions silently coerced the value, so migrated applications typically discover this only in production, where it shows up as 500s on writes that were previously working.</li>
