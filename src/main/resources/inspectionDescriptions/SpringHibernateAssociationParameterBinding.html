@@ -1,0 +1,48 @@
+<html>
+<body>
+Reports <code>setParameter</code> bindings that pass a String (or other non-association
+value) to a named parameter that the query compares against an association-typed path
+(a <code>@ManyToOne</code>/<code>@OneToOne</code> field of the query's entity). This is a
+runtime-breaking error: Hibernate 6 fails the query with a
+<code>QueryArgumentException</code> when it executes.
+
+<p>
+Hibernate 6 validates the parameter binding type when a query executes. Binding a
+<code>String</code> to an association path fails at runtime with
+<code>org.hibernate.QueryException: Argument [x] of type [java.lang.String] did not match
+parameter type [AssociationEntity]</code> (a <code>QueryArgumentException</code>). Older
+Hibernate versions silently coerced the value, so migrated applications typically only
+discover this in production.
+</p>
+
+<p>
+This typically happens after a migration turns a formerly String-typed field into an
+entity reference. Consider an entity whose <code>mandant</code> field became an
+association to a <code>Mandant</code> entity with the String <code>@Id</code>
+<code>mandant</code>:
+</p>
+
+<pre>
+// broken: binds a String to the association path
+em.createQuery("from LegalEntity p where p.mandant=:mandant", LegalEntity.class)
+  .setParameter("mandant", "BMW")            // QueryArgumentException at runtime
+</pre>
+
+<pre>
+// fixed: navigate the association to its String @Id
+em.createQuery("from LegalEntity p where p.mandant.mandant=:mandant", LegalEntity.class)
+  .setParameter("mandant", "BMW")
+</pre>
+
+<p>
+The inspection walks the fluent <code>createQuery(...).setParameter(...)</code> call
+chain, resolves every compared path (<code>p.mandant</code>, <code>le.mandant</code> for
+a <code>left join v.legalEntity le</code>) against the entity model, and flags bindings
+whose argument type does not match the association. Binding the association value itself
+is reported as valid.
+</p>
+
+<!-- tooltip end -->
+<p><small>Since Spring Buddy 1.x</small></p>
+</body>
+</html>

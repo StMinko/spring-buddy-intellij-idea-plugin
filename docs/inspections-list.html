@@ -365,7 +365,7 @@ h2 .count {
 <a href="#lombok">Lombok<span class="nav-count">25</span></a>
 <a href="#misc">Miscellaneous<span class="nav-count">10</span></a>
 <a href="#mockito">Mockito<span class="nav-count">3</span></a>
-<a href="#hiberante-migration">Hiberante Migration<span class="nav-count">49</span></a>
+<a href="#hiberante-migration">Hiberante Migration<span class="nav-count">50</span></a>
 <a href="#spring-2-3-migration">spring 2 -&gt; 3 migration<span class="nav-count">60</span></a>
 <a href="#spring-boot-4-migration">spring 3 -&gt; 4 migration<span class="nav-count">34</span></a>
 <a href="#pitfalls">Pitfalls<span class="nav-count">107</span></a>
@@ -380,10 +380,10 @@ h2 .count {
 </div>
 
 <div class="stat-row">
-<div class="stat" data-filter="error" onclick="applyFilter('error')" style="cursor:pointer;"><strong>124</strong><span>ERROR</span></div>
+<div class="stat" data-filter="error" onclick="applyFilter('error')" style="cursor:pointer;"><strong>125</strong><span>ERROR</span></div>
 <div class="stat" data-filter="warning" onclick="applyFilter('warning')" style="cursor:pointer;"><strong>229</strong><span>WARNING</span></div>
 <div class="stat" data-filter="weak" onclick="applyFilter('weak')" style="cursor:pointer;"><strong>9</strong><span>WEAK WARNING</span></div>
-<div class="stat" data-filter="all" onclick="applyFilter('all')" style="cursor:pointer;"><strong>362</strong><span>Total Inspections</span></div>
+<div class="stat" data-filter="all" onclick="applyFilter('all')" style="cursor:pointer;"><strong>363</strong><span>Total Inspections</span></div>
 </div>
 <div id="filter-indicator" style="display:none; margin-bottom:20px; color:var(--muted); font-size:15px; font-weight:600;"></div>
 
@@ -657,12 +657,17 @@ h2 .count {
 
 <div class="category-section">
 <div class="eyebrow misc">Hiberante Migration</div>
-<h2 id="hiberante-migration">Hiberante Migration<span class="count">49 inspections</span></h2>
+<h2 id="hiberante-migration">Hiberante Migration<span class="count">50 inspections</span></h2>
 <div class="grid-list">
 <article class="card" data-level="warning">
 <div class="class-name">SpringHibernateAddToDateFunction</div>
 <div class="display-name">Hibernate 6 add_to_date JPQL migration<span class="badge yellow">WARNING</span><span class="badge fix">FIX</span></div>
 <div class="description">Reports bare Oracle <pre class="code"> add_to_date(...)</pre> in non-native JPQL. Hibernate 6 cannot resolve it as a standard function. Quick-fix rewrites clear cases to <pre class="code"> function('date_add', cast(dateValue as LocalDate), N, day)</pre>.</div>
+</article>
+<article class="card" data-level="error">
+<div class="class-name">SpringHibernateAssociationParameterBinding</div>
+<div class="display-name">Hibernate 6 association-typed query parameter binding<span class="badge red">ERROR</span></div>
+<div class="description">Reports <pre class="code"> setParameter</pre> bindings that pass a String (or other non-association value) to a named parameter the query compares against an association-typed path (<pre class="code"> @ManyToOne</pre>/<pre class="code"> @OneToOne</pre>). Hibernate 6 validates the binding type and fails the query at runtime with <pre class="code"> QueryArgumentException</pre>; older Hibernate silently coerced it. Fix: navigate the association to its String <pre class="code"> @Id</pre>, e.g. <pre class="code"> p.mandant.mandant = :mandant</pre>.</div>
 </article>
 <article class="card" data-level="warning">
 <div class="class-name">SpringHibernateArrayMapping</div>

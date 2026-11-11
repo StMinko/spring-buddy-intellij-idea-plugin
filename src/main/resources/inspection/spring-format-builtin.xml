@@ -132,6 +132,7 @@
     <inspection_tool class="SpringJpaToOneLazyPitfall" enabled="true" level="WARNING" enabled_by_default="true" groups="pitfalls"/>
     <inspection_tool class="SpringHibernateImplicitSelect" enabled="true" level="WARNING" enabled_by_default="true" groups="hibernate migration"/>
     <inspection_tool class="SpringHibernateBarePositionalParameters" enabled="true" level="WARNING" enabled_by_default="true" groups="hibernate migration"/>
+    <inspection_tool class="SpringHibernateAssociationParameterBinding" enabled="true" level="ERROR" enabled_by_default="true" groups="hibernate migration"/>
     <inspection_tool class="SpringHibernateBareOracleFunctions" enabled="true" level="WARNING" enabled_by_default="true" groups="hibernate migration"/>
     <inspection_tool class="SpringHibernateBooleanCountExists" enabled="true" level="WARNING" enabled_by_default="true" groups="hibernate migration"/>
     <inspection_tool class="SpringHibernateCallableNamedNativeQuery" enabled="true" level="WARNING" enabled_by_default="true" groups="hibernate migration"/>

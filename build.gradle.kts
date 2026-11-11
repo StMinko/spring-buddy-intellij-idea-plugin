@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.sarhan.springformat"
-version = "1.0.9"
+version = "1.0.10"
 
 repositories {
     mavenCentral()
@@ -44,7 +44,7 @@ dependencies {
 intellijPlatform {
     pluginConfiguration {
         name = "Spring Buddy"
-        version = "1.0.9"
+        version = "1.0.10"
         description = """
             <h2>Make invisible Spring runtime behavior visible.</h2>
               <p>
@@ -72,6 +72,12 @@ intellijPlatform {
               </p>
         """.trimIndent()
         changeNotes = """
+            <h3>1.0.10</h3>
+            <ul>
+              <li><b>New ERROR-level Hibernate migration inspection: association-typed query parameter binding.</b> Binding a String (or any non-association value) to a named parameter that the query compares against an association-typed path &mdash; for example a field that a migration turned from a plain String into a <code>@ManyToOne</code> reference &mdash; is legal JPQL, but Hibernate 6 fails the query at runtime with <code>QueryArgumentException: Argument [x] of type [java.lang.String] did not match parameter type [AssociationEntity]</code>. Older Hibernate versions silently coerced the value, so migrated applications typically discover this only in production, where it shows up as 500s on writes that were previously working.</li>
+              <li>The inspection walks the fluent <code>createQuery(...).setParameter(...)</code> call chain, collects every named binding, resolves each compared path (<code>p.mandant</code>, or <code>le.mandant</code> for a <code>left join v.legalEntity le</code>) against the entity model, and flags bindings whose argument type does not match the association. Binding the association value itself is valid. The message contains the concrete fix: navigate the association to its String <code>@Id</code>, e.g. <code>p.mandant.mandant = :mandant</code>.</li>
+              <li>The inspection runs at ERROR severity, is registered in the bundled Spring Format inspection profile (so the bundled inspection runner reports it), and is listed in the ERROR-level inspection catalogue.</li>
+            </ul>
             <h3>1.0.9</h3>
             <ul>
               <li><b>Fewer false positives for weak transaction isolation:</b> PostgreSQL advisory locks (<code>pg_advisory_xact_lock</code>) now count as locks. <code>FOR UPDATE</code> locks are now also found in helpers of other beans, up to three calls deep, including SQL run through <code>JdbcTemplate</code>.</li>

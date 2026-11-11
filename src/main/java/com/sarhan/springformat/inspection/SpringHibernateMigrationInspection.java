@@ -16,7 +16,11 @@
 
 package com.sarhan.springformat.inspection;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -47,6 +51,7 @@ import com.intellij.psi.PsiAnnotationMemberValue;
 import com.intellij.psi.PsiArrayInitializerMemberValue;
 import com.intellij.psi.PsiArrayType;
 import com.intellij.psi.PsiClass;
+import com.intellij.psi.PsiClassObjectAccessExpression;
 import com.intellij.psi.PsiClassType;
 import com.intellij.psi.PsiDocumentManager;
 import com.intellij.psi.PsiElement;
@@ -120,6 +125,13 @@ public class SpringHibernateMigrationInspection extends AbstractBaseJavaLocalIns
             "(?i)add_to_date\\s*\\(\\s*(?:trunc\\s*\\(\\s*)?([^(),]+?)\\s*\\)?\\s*,\\s*(\\d+)\\s*\\)");
     private static final Pattern FUNCTION_PARAMETER = Pattern.compile(
             "(?i)function\\(\\s*'[^']+'\\s*,\\s*(?::\\w+|\\?\\d+)\\b");
+    private static final Pattern ROOT_ALIAS = Pattern.compile(
+            "\\bfrom\\s+([\\w.]+)(?:\\s+as)?\\s+(\\w+)", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern JOIN_ALIAS = Pattern.compile(
+            "\\bjoin\\s+(?:fetch\\s+)?([\\w.]+)(?:\\s+as)?\\s+(\\w+)", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern COMPARISON_BINDING = Pattern.compile(
+            "([\\w.]+)\\s*(?:=|!=|<>|<=|>=|<|>)\\s*:(\\w+)");
+    private static final String SET_PARAMETER_METHOD = "setParameter";
 
     private final Kind kind;
 
@@ -233,6 +245,8 @@ public class SpringHibernateMigrationInspection extends AbstractBaseJavaLocalIns
             this.visitScrollMode(expression, holder);
         } else if (this.kind == Kind.DIALECT_REGISTER_HIBERNATE_TYPE) {
             this.visitRegisterHibernateType(expression, holder);
+        } else if (this.kind == Kind.ASSOCIATION_PARAMETER_BINDING) {
+            this.visitAssociationParameterBinding(expression, holder);
         }
     }
 
@@ -244,6 +258,224 @@ public class SpringHibernateMigrationInspection extends AbstractBaseJavaLocalIns
         } else if (this.kind == Kind.INTERCEPTOR_SIGNATURE) {
             this.visitInterceptorMethod(method, holder);
         }
+    }
+
+    /**
+     * Detects a {@code setParameter} call that binds a non-association value (for
+     * example a String) to a named parameter that the query compares against an
+     * association-typed path (a {@code @ManyToOne}/{@code @OneToOne} field of the
+     * query's entity). Hibernate 6 validates the parameter binding type and fails such
+     * queries at runtime with a {@code QueryArgumentException}, while older Hibernate
+     * versions silently coerced the value. The fix is to navigate the association
+     * instead, for example {@code p.mandant.mandant = :mandant} when
+     * {@code LegalEntity.mandant} is an association to a {@code Mandant} entity whose
+     * {@code @Id} is {@code mandant}.
+     * <p>
+     * The inspection walks the fluent call chain of the outermost call of the chain,
+     * collects every {@code setParameter} binding, and resolves each compared path from
+     * the {@code FROM}/{@code JOIN} aliases of the query text against the entity model.
+     */
+    private void visitAssociationParameterBinding(@NotNull PsiMethodCallExpression expression,
+            @NotNull ProblemsHolder holder) {
+        if (this.isQualifierOfFollowingCall(expression)) {
+            return;
+        }
+        BindingChain chain = collectBindingChain(expression);
+        if (chain == null) {
+            return;
+        }
+        PsiExpression[] queryArguments = chain.queryCall().getArgumentList().getExpressions();
+        if (queryArguments.length == 0 || !(queryArguments[0] instanceof PsiLiteralExpression queryLiteral)
+                || !(queryLiteral.getValue() instanceof String query)) {
+            return;
+        }
+        PsiClass rootClass = rootEntityClass(queryArguments);
+        if (rootClass == null) {
+            return;
+        }
+        Map<String, List<String>> aliases = collectAliases(query);
+        for (NamedBinding binding : chain.bindings()) {
+            for (String path : comparisonPathsForParameter(query, binding.name())) {
+                PathResolution resolution = resolveFieldPath(path, aliases, rootClass);
+                if (resolution == null || !isAssociation(resolution.field())) {
+                    continue;
+                }
+                PsiClass associationClass = SpringInspectionUtil.resolvedClass(resolution.field().getType());
+                if (associationClass == null) {
+                    continue;
+                }
+                PsiType argumentType = binding.argument().getType();
+                if (argumentType == null) {
+                    continue;
+                }
+                PsiClass argumentClass = SpringInspectionUtil.resolvedClass(argumentType);
+                if (argumentClass != null && argumentClass.isEquivalentTo(associationClass)) {
+                    continue;
+                }
+                holder.registerProblem(binding.call(), "Hibernate 6 rejects binding a String to the association path '"
+                        + path + "' (" + resolution.ownerClass().getName() + "." + resolution.field().getName()
+                        + " is an association to " + associationClass.getName()
+                        + "): navigate the relation instead, e.g. '" + suggestedNavigation(path, associationClass)
+                        + " = :" + binding.name() + "'", ProblemHighlightType.ERROR);
+            }
+        }
+    }
+
+    private static boolean isQualifierOfFollowingCall(@NotNull PsiMethodCallExpression expression) {
+        return expression.getParent() instanceof PsiReferenceExpression reference
+                && reference.getQualifierExpression() == expression
+                && reference.getParent() instanceof PsiMethodCallExpression;
+    }
+
+    @Nullable
+    private static BindingChain collectBindingChain(@NotNull PsiMethodCallExpression expression) {
+        List<NamedBinding> bindings = new ArrayList<>();
+        PsiMethodCallExpression queryCall = null;
+        PsiExpression current = expression;
+        while (current instanceof PsiMethodCallExpression call) {
+            String name = call.getMethodExpression().getReferenceName();
+            if ("createQuery".equals(name)) {
+                queryCall = call;
+                break;
+            }
+            if (SET_PARAMETER_METHOD.equals(name)) {
+                PsiExpression[] arguments = call.getArgumentList().getExpressions();
+                if (arguments.length != 2 || !(arguments[0] instanceof PsiLiteralExpression literal)
+                        || !(literal.getValue() instanceof String parameterName)) {
+                    return null;
+                }
+                bindings.add(new NamedBinding(parameterName, arguments[1], call));
+            }
+            current = call.getMethodExpression().getQualifierExpression();
+        }
+        if (queryCall == null || bindings.isEmpty()) {
+            return null;
+        }
+        return new BindingChain(queryCall, bindings);
+    }
+
+    @Nullable
+    private static PsiClass rootEntityClass(@NotNull PsiExpression[] queryArguments) {
+        if (queryArguments.length < 2) {
+            return null;
+        }
+        if (queryArguments[1] instanceof PsiClassObjectAccessExpression classObject) {
+            return SpringInspectionUtil.resolvedClass(classObject.getOperand().getType());
+        }
+        return SpringInspectionUtil.resolvedClass(queryArguments[1].getType());
+    }
+
+    @NotNull
+    private static Map<String, List<String>> collectAliases(@NotNull String query) {
+        Map<String, List<String>> aliases = new HashMap<>();
+        Matcher rootMatcher = ROOT_ALIAS.matcher(query);
+        if (rootMatcher.find()) {
+            aliases.put(rootMatcher.group(2).toLowerCase(Locale.ROOT), new ArrayList<>());
+        }
+        Matcher joinMatcher = JOIN_ALIAS.matcher(query);
+        while (joinMatcher.find()) {
+            aliases.put(joinMatcher.group(2).toLowerCase(Locale.ROOT),
+                    new ArrayList<>(List.of(joinMatcher.group(1).split("\\."))));
+        }
+        return aliases;
+    }
+
+    @NotNull
+    private static List<String> comparisonPathsForParameter(@NotNull String query, @NotNull String parameterName) {
+        List<String> paths = new ArrayList<>();
+        Matcher matcher = COMPARISON_BINDING.matcher(query);
+        while (matcher.find()) {
+            if (matcher.group(2).equals(parameterName)) {
+                paths.add(matcher.group(1));
+            }
+        }
+        return paths;
+    }
+
+    @Nullable
+    private static PathResolution resolveFieldPath(@NotNull String path, @NotNull Map<String, List<String>> aliases,
+            @NotNull PsiClass rootClass) {
+        String[] parts = path.split("\\.");
+        List<String> aliasPath = aliases.get(parts[0].toLowerCase(Locale.ROOT));
+        if (aliasPath == null) {
+            return null;
+        }
+        List<String> segments = new ArrayList<>(absoluteSegments(aliasPath, aliases));
+        for (int i = 1; i < parts.length; i++) {
+            segments.add(parts[i]);
+        }
+        if (segments.isEmpty()) {
+            return null;
+        }
+        PsiClass current = rootClass;
+        PsiClass ownerClass = rootClass;
+        PsiField boundField = null;
+        for (int i = 0; i < segments.size(); i++) {
+            PsiField field = current.findFieldByName(segments.get(i), true);
+            if (field == null) {
+                return null;
+            }
+            ownerClass = current;
+            boundField = field;
+            if (i < segments.size() - 1) {
+                PsiClass next = SpringInspectionUtil.resolvedClass(field.getType());
+                if (next == null) {
+                    return null;
+                }
+                current = next;
+            }
+        }
+        return new PathResolution(boundField, ownerClass);
+    }
+
+    /**
+     * Resolves an alias path to the absolute field path from the query root by
+     * repeatedly replacing leading aliases with their joined paths, until the leading
+     * segment is the root alias (empty path) or a real field.
+     */
+    @NotNull
+    private static List<String> absoluteSegments(@NotNull List<String> aliasPath,
+            @NotNull Map<String, List<String>> aliases) {
+        List<String> result = new ArrayList<>(aliasPath);
+        for (int hop = 0; hop < 8 && !result.isEmpty(); hop++) {
+            List<String> ownerPath = aliases.get(result.get(0).toLowerCase(Locale.ROOT));
+            if (ownerPath == null) {
+                break;
+            }
+            result.remove(0);
+            result.addAll(0, ownerPath);
+            if (ownerPath.isEmpty()) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    private static boolean isAssociation(@NotNull PsiField field) {
+        if (SpringInspectionUtil.findAnyAnnotation(field.getModifierList(),
+                "jakarta.persistence.ManyToOne", "javax.persistence.ManyToOne",
+                "jakarta.persistence.OneToOne", "javax.persistence.OneToOne") != null) {
+            return true;
+        }
+        PsiClass referenced = SpringInspectionUtil.resolvedClass(field.getType());
+        return referenced != null && SpringInspectionUtil.isJpaEntity(referenced);
+    }
+
+    @NotNull
+    private static String suggestedNavigation(@NotNull String path, @NotNull PsiClass associationClass) {
+        return path + "." + associationIdField(associationClass);
+    }
+
+    @NotNull
+    private static String associationIdField(@NotNull PsiClass associationClass) {
+        for (PsiField field : associationClass.getAllFields()) {
+            if (SpringInspectionUtil.findAnyAnnotation(field.getModifierList(),
+                    "jakarta.persistence.Id", "javax.persistence.Id",
+                    "jakarta.persistence.EmbeddedId", "javax.persistence.EmbeddedId") != null) {
+                return field.getName();
+            }
+        }
+        return "id";
     }
 
     private void visitReferenceExpression(@NotNull PsiReferenceExpression expression,
@@ -1570,6 +1802,13 @@ public class SpringHibernateMigrationInspection extends AbstractBaseJavaLocalIns
 
     private record QueryValue(@NotNull PsiElement element, @NotNull String query) { }
 
+    private record NamedBinding(@NotNull String name, @NotNull PsiExpression argument,
+            @NotNull PsiMethodCallExpression call) { }
+
+    private record BindingChain(@NotNull PsiMethodCallExpression queryCall, @NotNull List<NamedBinding> bindings) { }
+
+    private record PathResolution(@NotNull PsiField field, @NotNull PsiClass ownerClass) { }
+
     private enum Kind {
         IMPLICIT_SELECT,
         BARE_POSITIONAL_PARAMETERS,
@@ -1615,6 +1854,7 @@ public class SpringHibernateMigrationInspection extends AbstractBaseJavaLocalIns
         CALLABLE_NAMED_NATIVE_QUERY,
         LAZY_COLLECTION,
         DIALECT_REGISTER_HIBERNATE_TYPE,
+        ASSOCIATION_PARAMETER_BINDING,
         MULTI_TENANCY_API
     }
 
@@ -1792,6 +2032,10 @@ public class SpringHibernateMigrationInspection extends AbstractBaseJavaLocalIns
 
     public static class DialectRegisterHibernateType extends SpringHibernateMigrationInspection {
         public DialectRegisterHibernateType() { super(Kind.DIALECT_REGISTER_HIBERNATE_TYPE); }
+    }
+
+    public static class AssociationParameterBinding extends SpringHibernateMigrationInspection {
+        public AssociationParameterBinding() { super(Kind.ASSOCIATION_PARAMETER_BINDING); }
     }
 
     public static class MultiTenancyApi extends SpringHibernateMigrationInspection {
