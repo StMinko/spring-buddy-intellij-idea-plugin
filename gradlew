@@ -162,7 +162,7 @@ save () {
 APP_ARGS=$(save "$@")
 
 # Collect all arguments for the java command, following the shell quoting and substitution rules
-if $JAVACMD --add-opens java.base/java.lang=ALL-UNNAMED -version ; then
+if "$JAVACMD" --add-opens java.base/java.lang=ALL-UNNAMED -version ; then
     DEFAULT_JVM_OPTS="--add-opens java.base/java.lang=ALL-UNNAMED $DEFAULT_JVM_OPTS"
 fi
 
